@@ -141,7 +141,7 @@ def notify(title, body, tags, priority="default"):
         r.read()
 
 
-def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, forecast_peak_hour=None, forecast_close_hour=None, forecast_open_hour=None):
+def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, forecast_peak_hour=None, forecast_close_hour=None, forecast_open_hour=None, forecast_hourly=None):
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         return
@@ -156,6 +156,7 @@ def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, fore
                     "forecast_peak_hour": forecast_peak_hour,
                     "forecast_close_hour": forecast_close_hour,
                     "forecast_open_hour": forecast_open_hour,
+                    "forecast_hourly": forecast_hourly,
                     "updated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 }, indent=2)
             }
@@ -249,6 +250,7 @@ def main():
 
     # Fetch today's forecast; derive indoor estimate and all forward-looking stats
     forecast_max = forecast_peak_hour = forecast_close_hour = forecast_open_hour = None
+    forecast_hourly = None
     indoor_est = INDOOR_BASE
     try:
         forecast = get_forecast()
@@ -256,6 +258,7 @@ def main():
         forecast_peak_hour = next(h for h, t in forecast if t == forecast_max)
         indoor_sim = simulate_indoor_day(forecast)
         indoor_est = estimate_indoor(forecast)
+        forecast_hourly = [[h, t_out, t_in] for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)]
         # Use simulated indoor at each forecast hour for consistent thermal comparisons
         forecast_close_hour = next(
             (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
@@ -272,7 +275,7 @@ def main():
 
     if os.getenv("DAILY_SUMMARY") == "true":
         daily_summary(outdoor)
-        update_dashboard(outdoor, load_state() or "open", indoor_est, forecast_max, forecast_peak_hour, forecast_close_hour, forecast_open_hour)
+        update_dashboard(outdoor, load_state() or "open", indoor_est, forecast_max, forecast_peak_hour, forecast_close_hour, forecast_open_hour, forecast_hourly)
         return
 
     last = load_state()
@@ -308,7 +311,7 @@ def main():
             notify("Open up", body, tags="house,leaves")
 
     save_state(status)
-    update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, forecast_close_hour, forecast_open_hour)
+    update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, forecast_close_hour, forecast_open_hour, forecast_hourly)
 
 
 if __name__ == "__main__":

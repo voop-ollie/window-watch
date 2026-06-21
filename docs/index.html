@@ -230,44 +230,63 @@
       }
     }
 
+    const HYSTERESIS = 1.0  // must match Python default
+
+    function liveTemps(d) {
+      // Between actual refreshes, interpolate from the stored hourly forecast
+      if (d.forecast_hourly) {
+        const nowHour = new Date().getHours()
+        const entry = d.forecast_hourly.find(e => e[0] === nowHour)
+        if (entry) return { outdoor: entry[1], indoor: entry[2], isForecast: true }
+      }
+      return { outdoor: d.outdoor_c, indoor: d.indoor_est_c, isForecast: false }
+    }
+
     function updateUI() {
       if (!lastData) return
       const d = lastData
-      const s = d.status || "unknown"
+      const { outdoor, indoor, isForecast } = liveTemps(d)
+
+      // Re-derive status from live temps so the display stays current between runs
+      let s = d.status || "unknown"
+      if (outdoor != null && indoor != null) {
+        if (outdoor >= indoor + HYSTERESIS)      s = "close"
+        else if (outdoor <= indoor - HYSTERESIS) s = "open"
+      }
       const copy = COPY[s] || COPY.unknown
 
       document.body.className = s
       document.getElementById("status").textContent = copy.label
       document.getElementById("hint").textContent = copy.hint
-      document.getElementById("temp").innerHTML = d.outdoor_c != null
-        ? `${d.outdoor_c.toFixed(1)}<span>°C</span>`
+      document.getElementById("temp").innerHTML = outdoor != null
+        ? `${isForecast ? "~" : ""}${outdoor.toFixed(1)}<span>°C</span>`
         : `—<span>°C</span>`
       const balance = document.getElementById("balance")
-      if (d.outdoor_c != null && d.indoor_est_c != null) {
+      if (outdoor != null && indoor != null) {
         balance.style.display = ""
-        const RANGE = 8, HYST = 1.5
-        const delta = d.outdoor_c - d.indoor_est_c
+        const RANGE = 8
+        const delta = outdoor - indoor
         const pct = Math.min(95, Math.max(5, 50 + (delta / RANGE) * 50))
-        const deadPct = (HYST / RANGE) * 50
+        const deadPct = (HYSTERESIS / RANGE) * 50
         document.getElementById("balance-deadband").style.left = (50 - deadPct) + "%"
         document.getElementById("balance-deadband").style.width = (deadPct * 2) + "%"
         const ball = document.getElementById("balance-ball")
         const fill = document.getElementById("balance-fill")
         ball.style.left = pct + "%"
-        if (delta > HYST) {
+        if (delta > HYSTERESIS) {
           fill.style.left = "50%"; fill.style.width = (pct - 50) + "%"
           fill.style.background = "rgba(255,120,100,0.55)"; ball.style.background = "#ff8c8c"
-        } else if (delta < -HYST) {
+        } else if (delta < -HYSTERESIS) {
           fill.style.left = pct + "%"; fill.style.width = (50 - pct) + "%"
           fill.style.background = "rgba(77,182,255,0.55)"; ball.style.background = "#4db6ff"
         } else {
           fill.style.width = "0%"; ball.style.background = "rgba(255,255,255,0.65)"
         }
-        document.getElementById("balance-indoor-label").textContent = `~${d.indoor_est_c.toFixed(0)}°C inside`
-        document.getElementById("balance-outdoor-label").textContent = `${d.outdoor_c.toFixed(1)}°C outside`
+        document.getElementById("balance-indoor-label").textContent = `~${indoor.toFixed(0)}°C inside`
+        document.getElementById("balance-outdoor-label").textContent = `${isForecast ? "~" : ""}${outdoor.toFixed(1)}°C outside`
         const absDelta = Math.abs(delta)
         document.getElementById("balance-delta").textContent =
-          absDelta < HYST ? "in balance" :
+          absDelta < HYSTERESIS ? "in balance" :
           delta > 0 ? `+${delta.toFixed(1)}° warmer outside` : `${delta.toFixed(1)}° cooler outside`
       } else {
         balance.style.display = "none"
