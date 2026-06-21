@@ -28,8 +28,9 @@ import sys
 import urllib.parse
 import urllib.request
 
-LAT = os.getenv("LAT") or "51.5128"
-LON = os.getenv("LON") or "-0.0566"
+LAT = os.getenv("LAT") or "51.527"
+LON = os.getenv("LON") or "-0.021"
+WEATHER_MODEL = os.getenv("WEATHER_MODEL") or "icon_d2"
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 HYST = float(os.getenv("HYSTERESIS", "1.5"))
@@ -41,7 +42,7 @@ def get_outdoor():
     url = (
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={LAT}&longitude={LON}"
-        "&current=temperature_2m&temperature_unit=celsius"
+        f"&current=temperature_2m&temperature_unit=celsius&models={WEATHER_MODEL}"
     )
     with urllib.request.urlopen(url, timeout=20) as r:
         data = json.load(r)
