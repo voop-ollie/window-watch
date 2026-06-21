@@ -82,10 +82,12 @@ def simulate_indoor_day(forecast):
     """Run the thermal lag model across all 24 forecast hours.
 
     Returns a list of (hour, indoor_est) pairs — the full day simulation.
-    Used both for the current snapshot and for forward-looking close/open predictions.
-    Swap the body out for a real sensor when the Shelly arrives.
+    Starting temp is the overnight minimum outdoor (hours 0-5), which is more
+    realistic than a fixed base on warm nights where the room can't cool further.
     """
-    indoor = INDOOR_BASE
+    overnight = [t for h, t in forecast if h <= 5]
+    start = min(overnight) if overnight else INDOOR_BASE
+    indoor = min(start, INDOOR_BASE)  # never start warmer than the configured base
     result = []
     for h, outdoor in forecast:
         effective = outdoor + (SOLAR_GAIN if 7 <= h <= 19 else 0)
@@ -194,7 +196,7 @@ def daily_summary(outdoor):
     indoor_sim = simulate_indoor_day(forecast)
     close_hour = next(
         (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
-         if t_out >= t_in + HYSTERESIS),
+         if h >= 6 and t_out >= t_in + HYSTERESIS),
         None,
     )
     open_hour = next(
@@ -248,7 +250,7 @@ def main():
         # Use simulated indoor at each forecast hour for consistent thermal comparisons
         forecast_close_hour = next(
             (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
-             if t_out >= t_in + HYSTERESIS),
+             if h >= 6 and t_out >= t_in + HYSTERESIS),
             None,
         )
         forecast_open_hour = next(
