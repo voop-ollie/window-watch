@@ -78,22 +78,31 @@ def get_forecast():
     return [(int(t.split("T")[1][:2]), float(temp)) for t, temp in zip(times, temps)]
 
 
-def estimate_indoor(forecast):
-    """First-order thermal lag model: simulate indoor temp from today's forecast.
+def simulate_indoor_day(forecast):
+    """Run the thermal lag model across all 24 forecast hours.
 
-    Runs from midnight up to the current local hour. THERMAL_ALPHA is the fraction
-    of outdoor heat that bleeds in each hour. SOLAR_GAIN is added during 8–18 to
-    account for south-facing solar loading. Swap this function out for a real sensor
-    reading when the Shelly arrives.
+    Returns a list of (hour, indoor_est) pairs — the full day simulation.
+    Used both for the current snapshot and for forward-looking close/open predictions.
+    Swap the body out for a real sensor when the Shelly arrives.
     """
-    current_hour = datetime.now(timezone.utc).hour + 1  # UTC+1 approximates BST
     indoor = INDOOR_BASE
+    result = []
     for h, outdoor in forecast:
-        if h > current_hour:
-            break
         effective = outdoor + (SOLAR_GAIN if 7 <= h <= 19 else 0)
         indoor = THERMAL_ALPHA * effective + (1 - THERMAL_ALPHA) * indoor
-    return round(indoor, 1)
+        result.append((h, round(indoor, 1)))
+    return result
+
+
+def estimate_indoor(forecast):
+    """Return estimated indoor temp at the current local hour."""
+    current_hour = datetime.now(timezone.utc).hour + 1  # UTC+1 approximates BST
+    indoor = INDOOR_BASE
+    for h, est in simulate_indoor_day(forecast):
+        indoor = est
+        if h >= current_hour:
+            break
+    return indoor
 
 
 def decide(outdoor, indoor_est, last):
@@ -182,9 +191,15 @@ def daily_summary(outdoor):
 
     max_temp = max(t for _, t in forecast)
     max_hour = next(h for h, t in forecast if t == max_temp)
-    close_hour = next((h for h, t in forecast if t >= CLOSE_ABOVE), None)
+    indoor_sim = simulate_indoor_day(forecast)
+    close_hour = next(
+        (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
+         if t_out >= t_in + HYSTERESIS),
+        None,
+    )
     open_hour = next(
-        (h for h, t in forecast if h > (max_hour or 0) and t <= EVENING_OPEN_BELOW),
+        (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
+         if h > (max_hour or 0) and t_out <= t_in - HYSTERESIS),
         None,
     )
 
@@ -200,7 +215,7 @@ def daily_summary(outdoor):
             + (f" and open up again after {fmt_hour(open_hour)}." if open_hour else " — may stay hot into the evening.")
         )
         notify(title, body, tags="house,sunny", priority="high")
-    elif max_temp >= OPEN_BELOW:
+    elif max_temp >= INDOOR_BASE + 3:
         notify(
             "Warm but manageable today",
             f"Max {max_temp:.0f}°C around {fmt_hour(max_hour)} — "
@@ -228,10 +243,17 @@ def main():
         forecast = get_forecast()
         forecast_max = max(t for _, t in forecast)
         forecast_peak_hour = next(h for h, t in forecast if t == forecast_max)
-        forecast_close_hour = next((h for h, t in forecast if t >= CLOSE_ABOVE), None)
+        indoor_sim = simulate_indoor_day(forecast)
         indoor_est = estimate_indoor(forecast)
+        # Use simulated indoor at each forecast hour for consistent thermal comparisons
+        forecast_close_hour = next(
+            (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
+             if t_out >= t_in + HYSTERESIS),
+            None,
+        )
         forecast_open_hour = next(
-            (h for h, t in forecast if h > (forecast_peak_hour or 0) and t <= indoor_est - HYSTERESIS),
+            (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
+             if h > (forecast_peak_hour or 0) and t_out <= t_in - HYSTERESIS),
             None,
         )
     except Exception as e:
