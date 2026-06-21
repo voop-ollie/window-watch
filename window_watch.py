@@ -79,7 +79,9 @@ def get_indoor():
     try:
         indoor = asyncio.run(get_indoor_vaillant())
     except Exception as e:
+        import traceback
         print(f"[warn] Vaillant read failed: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
     if indoor is None and INDOOR_FALLBACK:
         indoor = float(INDOOR_FALLBACK)
     return indoor
@@ -133,7 +135,14 @@ def main():
     print(f"outdoor={outdoor:.1f}  indoor={indoor:.1f}  last={last}  -> {status}")
 
     if status != last:
-        if status == "close":
+        if last is None:
+            notify(
+                "Window Watch running",
+                f"Started. Outside {outdoor:.1f}°C, inside {indoor:.1f}°C. "
+                f"Windows should be: {status}.",
+                tags="house,white_check_mark",
+            )
+        elif status == "close":
             notify(
                 "Close up now",
                 f"Outside {outdoor:.1f}°C is now above inside {indoor:.1f}°C. "
@@ -141,7 +150,7 @@ def main():
                 tags="house,sunny",
                 priority="high",
             )
-        elif status == "open" and last is not None:
+        elif status == "open":
             notify(
                 "Open up",
                 f"Outside {outdoor:.1f}°C has dropped below inside {indoor:.1f}°C. "
