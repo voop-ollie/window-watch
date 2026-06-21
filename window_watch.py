@@ -42,9 +42,9 @@ LAT = os.getenv("LAT") or "51.527"
 LON = os.getenv("LON") or "-0.021"
 WEATHER_MODEL = os.getenv("WEATHER_MODEL") or "icon_d2"
 CLOSE_ABOVE = float(os.getenv("CLOSE_ABOVE") or "25")    # still used for forecast_close_hour
-THERMAL_ALPHA = float(os.getenv("THERMAL_ALPHA") or "0.20")   # heat bleed-in per hour (higher = uninsulated)
+THERMAL_ALPHA = float(os.getenv("THERMAL_ALPHA") or "0.18")   # heat bleed-in per hour
 INDOOR_BASE = float(os.getenv("INDOOR_BASE") or "19.0")        # overnight cool-down target
-SOLAR_GAIN = float(os.getenv("SOLAR_GAIN") or "4.5")           # south-facing solar load (°C); butterfly roof gets extended exposure
+SOLAR_GAIN = float(os.getenv("SOLAR_GAIN") or "3.0")           # south-facing solar load added during daylight (°C)
 HYSTERESIS = float(os.getenv("HYSTERESIS") or "1.5")           # dead band to prevent flapping
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
