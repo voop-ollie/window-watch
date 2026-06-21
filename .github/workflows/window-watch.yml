@@ -30,7 +30,7 @@ jobs:
 
       # Carry the last "open/close" state between runs so we only buzz on changes
       - name: Restore state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: state.json
           key: window-state-${{ github.run_id }}
@@ -42,14 +42,13 @@ jobs:
           LON: ${{ vars.LON }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           CLOSE_ABOVE: ${{ vars.CLOSE_ABOVE }}
-          OPEN_BELOW: ${{ vars.OPEN_BELOW }}
           GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
           DAILY_SUMMARY: ${{ github.event.schedule == '10 7 * * *' || inputs.daily_summary == true }}
         run: python window_watch.py
 
       - name: Save state
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: state.json
           key: window-state-${{ github.run_id }}

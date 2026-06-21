@@ -70,11 +70,28 @@
 
     .forecast strong { opacity: 1; }
     .forecast.warn { background: rgba(255,200,0,0.12); }
+    .forecast-peak { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 13px; opacity: 0.5; }
 
     .updated {
       font-size: 12px;
       opacity: 0.35;
     }
+
+    .refresh-btn {
+      margin-top: 20px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: inherit;
+      font-size: 13px;
+      padding: 8px 18px;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .refresh-btn:hover { background: rgba(255,255,255,0.18); }
+    .refresh-btn:active { background: rgba(255,255,255,0.08); }
+    .refresh-btn:disabled { opacity: 0.4; cursor: default; }
+    #checked { margin-left: 8px; opacity: 0.55; }
 
     .dot {
       display: inline-block;
@@ -99,7 +116,8 @@
     <div class="temp" id="temp">—<span>°C</span></div>
     <div class="thresholds" id="thresholds"></div>
     <div class="forecast" id="forecast" style="display:none"></div>
-    <div class="updated"><span class="dot"></span><span id="updated">checking…</span></div>
+    <div class="updated"><span class="dot"></span><span id="updated">checking…</span><span id="checked"></span></div>
+    <button class="refresh-btn" id="refresh-btn" onclick="manualRefresh()">Refresh</button>
   </div>
 
   <script>
@@ -127,12 +145,14 @@
     }
 
     let lastData = null;
+    let lastChecked = null;
 
     async function load() {
       try {
         const res = await fetch(GIST_API)
         const gist = await res.json()
         lastData = JSON.parse(gist.files["window-watch-status.json"].content)
+        lastChecked = new Date()
         updateUI()
       } catch(e) {
         document.getElementById("hint").textContent = "couldn't load data"
@@ -151,27 +171,45 @@
       document.getElementById("temp").innerHTML = d.outdoor_c != null
         ? `${d.outdoor_c.toFixed(1)}<span>°C outside</span>`
         : `—<span>°C</span>`
-      document.getElementById("thresholds").textContent = d.close_above_c != null
-        ? `Close above ${d.close_above_c}° · Open below ${d.open_below_c}°`
+      document.getElementById("thresholds").textContent = d.indoor_est_c != null
+        ? `~${d.indoor_est_c.toFixed(0)}°C estimated inside`
         : ""
 
       // Forecast block
       const fc = document.getElementById("forecast")
-      if (d.forecast_max_c != null) {
+      if (d.forecast_close_hour != null) {
         fc.style.display = ""
-        const peak = `peaks at <strong>${d.forecast_max_c.toFixed(0)}°C</strong> around ${fmtHour(d.forecast_peak_hour)}`
-        if (d.forecast_close_hour != null) {
-          fc.className = "forecast warn"
-          fc.innerHTML = `Today ${peak} — close up before <strong>${fmtHour(d.forecast_close_hour)}</strong>`
+        fc.className = "forecast warn"
+        let html = `Close before <strong>${fmtHour(d.forecast_close_hour)}</strong>`
+        if (d.forecast_open_hour != null) {
+          html += ` · open after <strong>${fmtHour(d.forecast_open_hour)}</strong>`
         } else {
-          fc.className = "forecast"
-          fc.innerHTML = `Today ${peak} — should stay manageable`
+          html += ` · may stay hot overnight`
         }
+        if (d.forecast_max_c != null && d.forecast_peak_hour != null) {
+          html += `<div class="forecast-peak">Today peaks at ${d.forecast_max_c.toFixed(0)}°C around ${fmtHour(d.forecast_peak_hour)}</div>`
+        }
+        fc.innerHTML = html
       } else {
         fc.style.display = "none"
       }
 
-      document.getElementById("updated").textContent = timeAgo(d.updated_utc)
+      document.getElementById("updated").textContent = "data " + timeAgo(d.updated_utc)
+      if (lastChecked) {
+        const checkedDiff = Math.floor((Date.now() - lastChecked.getTime()) / 60000)
+        const checkedStr = checkedDiff < 1 ? "checked just now" : `checked ${checkedDiff}m ago`
+        document.getElementById("checked").textContent = "· " + checkedStr
+      }
+    }
+
+    async function manualRefresh() {
+      const btn = document.getElementById("refresh-btn")
+      btn.disabled = true
+      btn.textContent = "Refreshing…"
+      document.getElementById("checked").textContent = ""
+      await load()
+      btn.textContent = "Refresh"
+      btn.disabled = false
     }
 
     load()

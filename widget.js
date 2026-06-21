@@ -91,28 +91,31 @@ row.addSpacer()
 const right = row.addStack()
 right.layoutVertically()
 
-// Current temp
+// Outdoor vs indoor
 if (data?.outdoor_c != null) {
-  const tempText = right.addText(`${data.outdoor_c.toFixed(1)}°C now`)
+  const tempText = right.addText(`${data.outdoor_c.toFixed(1)}°C outside`)
   tempText.font = Font.semiboldSystemFont(14)
   tempText.textColor = new Color("#ffffff", 0.85)
   tempText.rightAlignText()
+  right.addSpacer(2)
+}
+if (data?.indoor_est_c != null) {
+  const indoorText = right.addText(`~${data.indoor_est_c.toFixed(0)}°C inside`)
+  indoorText.font = Font.systemFont(12)
+  indoorText.textColor = new Color("#ffffff", 0.45)
+  indoorText.rightAlignText()
   right.addSpacer(5)
 }
 
 // Forecast line — most actionable info
-if (data?.forecast_max_c != null) {
-  let fcLine
-  if (data.forecast_close_hour != null) {
-    fcLine = `Close before ${fmtHour(data.forecast_close_hour)}`
-  } else {
-    fcLine = `Peak ${data.forecast_max_c.toFixed(0)}° at ${fmtHour(data.forecast_peak_hour)}`
+if (data?.forecast_close_hour != null) {
+  let fcLine = `Close before ${fmtHour(data.forecast_close_hour)}`
+  if (data.forecast_open_hour != null) {
+    fcLine += ` · open after ${fmtHour(data.forecast_open_hour)}`
   }
   const fcText = right.addText(fcLine)
   fcText.font = Font.systemFont(12)
-  fcText.textColor = data.forecast_close_hour != null
-    ? new Color("#ffd060", 0.9)
-    : new Color("#ffffff", 0.5)
+  fcText.textColor = new Color("#ffd060", 0.9)
   fcText.rightAlignText()
   right.addSpacer(5)
 }
