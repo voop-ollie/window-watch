@@ -1,7 +1,7 @@
 // Window Watch — Scriptable widget (medium / full-width)
 // Install: paste into a new Scriptable script, add to home screen as a Medium widget
 
-const GIST_URL = "https://gist.githubusercontent.com/voop-ollie/bd24c63bd7e129c86942db6ed67f9008/raw/window-watch-status.json"
+const GIST_API_URL = "https://api.github.com/gists/bd24c63bd7e129c86942db6ed67f9008"
 const DASHBOARD_URL = "https://voop-ollie.github.io/window-watch/"
 
 const THEME = {
@@ -43,8 +43,9 @@ function timeAgo(utcString) {
 
 async function fetchStatus() {
   try {
-    const req = new Request(GIST_URL + "?t=" + Date.now())
-    return await req.loadJSON()
+    const req = new Request(GIST_API_URL)
+    const res = await req.loadJSON()
+    return JSON.parse(res.files["window-watch-status.json"].content)
   } catch (e) {
     return null
   }

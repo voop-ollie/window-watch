@@ -103,7 +103,7 @@
   </div>
 
   <script>
-    const GIST = "https://gist.githubusercontent.com/voop-ollie/bd24c63bd7e129c86942db6ed67f9008/raw/window-watch-status.json"
+    const GIST_API = "https://api.github.com/gists/bd24c63bd7e129c86942db6ed67f9008"
 
     const COPY = {
       open:    { label: "OPEN",  hint: "let the air through" },
@@ -126,48 +126,59 @@
       return `${Math.floor(diff / 60)}h ago`
     }
 
+    let lastData = null;
+
     async function load() {
       try {
-        const res = await fetch(GIST + "?t=" + Date.now())
-        const d = await res.json()
-        const s = d.status || "unknown"
-        const copy = COPY[s] || COPY.unknown
-
-        document.body.className = s
-        document.getElementById("status").textContent = copy.label
-        document.getElementById("hint").textContent = copy.hint
-        document.getElementById("temp").innerHTML = d.outdoor_c != null
-          ? `${d.outdoor_c.toFixed(1)}<span>°C outside</span>`
-          : `—<span>°C</span>`
-        document.getElementById("thresholds").textContent = d.close_above_c != null
-          ? `Close above ${d.close_above_c}° · Open below ${d.open_below_c}°`
-          : ""
-
-        // Forecast block
-        const fc = document.getElementById("forecast")
-        if (d.forecast_max_c != null) {
-          fc.style.display = ""
-          const peak = `peaks at <strong>${d.forecast_max_c.toFixed(0)}°C</strong> around ${fmtHour(d.forecast_peak_hour)}`
-          if (d.forecast_close_hour != null) {
-            fc.className = "forecast warn"
-            fc.innerHTML = `Today ${peak} — close up before <strong>${fmtHour(d.forecast_close_hour)}</strong>`
-          } else {
-            fc.className = "forecast"
-            fc.innerHTML = `Today ${peak} — should stay manageable`
-          }
-        } else {
-          fc.style.display = "none"
-        }
-
-        document.getElementById("updated").textContent = timeAgo(d.updated_utc)
+        const res = await fetch(GIST_API)
+        const gist = await res.json()
+        lastData = JSON.parse(gist.files["window-watch-status.json"].content)
+        updateUI()
       } catch(e) {
         document.getElementById("hint").textContent = "couldn't load data"
       }
     }
 
+    function updateUI() {
+      if (!lastData) return
+      const d = lastData
+      const s = d.status || "unknown"
+      const copy = COPY[s] || COPY.unknown
+
+      document.body.className = s
+      document.getElementById("status").textContent = copy.label
+      document.getElementById("hint").textContent = copy.hint
+      document.getElementById("temp").innerHTML = d.outdoor_c != null
+        ? `${d.outdoor_c.toFixed(1)}<span>°C outside</span>`
+        : `—<span>°C</span>`
+      document.getElementById("thresholds").textContent = d.close_above_c != null
+        ? `Close above ${d.close_above_c}° · Open below ${d.open_below_c}°`
+        : ""
+
+      // Forecast block
+      const fc = document.getElementById("forecast")
+      if (d.forecast_max_c != null) {
+        fc.style.display = ""
+        const peak = `peaks at <strong>${d.forecast_max_c.toFixed(0)}°C</strong> around ${fmtHour(d.forecast_peak_hour)}`
+        if (d.forecast_close_hour != null) {
+          fc.className = "forecast warn"
+          fc.innerHTML = `Today ${peak} — close up before <strong>${fmtHour(d.forecast_close_hour)}</strong>`
+        } else {
+          fc.className = "forecast"
+          fc.innerHTML = `Today ${peak} — should stay manageable`
+        }
+      } else {
+        fc.style.display = "none"
+      }
+
+      document.getElementById("updated").textContent = timeAgo(d.updated_utc)
+    }
+
     load()
-    setInterval(load, 30 * 60 * 1000)
-    setInterval(() => load(), 60000)
+    // Fetch new data every 10 minutes
+    setInterval(load, 10 * 60 * 1000)
+    // Update the "time ago" string every 60 seconds
+    setInterval(updateUI, 60000)
   </script>
 </body>
 </html>
