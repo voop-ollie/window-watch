@@ -1,12 +1,36 @@
-// Window Watch — Scriptable widget
-// Install: paste this into a new Scriptable script, add to home screen as small/medium widget
+// Window Watch — Scriptable widget (medium / full-width)
+// Install: paste into a new Scriptable script, add to home screen as a Medium widget
 
 const GIST_URL = "https://gist.githubusercontent.com/voop-ollie/bd24c63bd7e129c86942db6ed67f9008/raw/window-watch-status.json"
+const DASHBOARD_URL = "https://voop-ollie.github.io/window-watch/"
 
-const COLORS = {
-  open:    { bg: new Color("#0f3460"), text: new Color("#e0f0ff"), label: "OPEN" },
-  close:   { bg: new Color("#7b1e1e"), text: new Color("#ffe8e8"), label: "CLOSE" },
-  unknown: { bg: new Color("#2a2a2a"), text: new Color("#cccccc"), label: "—" },
+const THEME = {
+  open: {
+    bg:     new Color("#0f3460"),
+    accent: new Color("#4db6ff"),
+    label:  "OPEN",
+    hint:   "let the air through",
+  },
+  close: {
+    bg:     new Color("#7b1e1e"),
+    accent: new Color("#ff8c8c"),
+    label:  "CLOSE",
+    hint:   "hold the cool in",
+  },
+  unknown: {
+    bg:     new Color("#1a1a2e"),
+    accent: new Color("#888888"),
+    label:  "—",
+    hint:   "waiting for data",
+  },
+}
+
+function timeAgo(utcString) {
+  if (!utcString) return "never"
+  const diff = Math.floor((Date.now() - new Date(utcString).getTime()) / 60000)
+  if (diff < 1) return "just now"
+  if (diff < 60) return `${diff}m ago`
+  return `${Math.floor(diff / 60)}h ago`
 }
 
 async function fetchStatus() {
@@ -18,50 +42,63 @@ async function fetchStatus() {
   }
 }
 
-function timeAgo(utcString) {
-  if (!utcString) return "never"
-  const diff = Math.floor((Date.now() - new Date(utcString).getTime()) / 60000)
-  if (diff < 1) return "just now"
-  if (diff < 60) return `${diff}m ago`
-  return `${Math.floor(diff / 60)}h ago`
-}
-
 const data = await fetchStatus()
 const status = data?.status ?? "unknown"
-const theme = COLORS[status] ?? COLORS.unknown
+const theme = THEME[status] ?? THEME.unknown
 
 const widget = new ListWidget()
 widget.backgroundColor = theme.bg
-widget.setPadding(14, 16, 14, 16)
+widget.setPadding(16, 20, 16, 20)
+widget.url = DASHBOARD_URL
 
-// Status label
-const stateText = widget.addText(theme.label)
-stateText.font = Font.boldSystemFont(32)
-stateText.textColor = theme.text
+// Layout: two columns
+const row = widget.addStack()
+row.layoutHorizontally()
+row.centerAlignContent()
 
-widget.addSpacer(8)
+// ── Left column: status ──────────────────────
+const left = row.addStack()
+left.layoutVertically()
+left.size = new Size(160, 0)
 
-// Outdoor temp
+const labelText = left.addText(theme.label)
+labelText.font = Font.boldSystemFont(40)
+labelText.textColor = theme.accent
+labelText.minimumScaleFactor = 0.7
+
+left.addSpacer(4)
+
+const hintText = left.addText(theme.hint)
+hintText.font = Font.systemFont(13)
+hintText.textColor = new Color(theme.accent.hex, 0.6)
+
+row.addSpacer()
+
+// ── Right column: details ────────────────────
+const right = row.addStack()
+right.layoutVertically()
+
 if (data?.outdoor_c != null) {
-  const tempText = widget.addText(`Outside: ${data.outdoor_c.toFixed(1)}°C`)
-  tempText.font = Font.systemFont(14)
-  tempText.textColor = new Color(theme.text.hex, 0.8)
+  const tempText = right.addText(`${data.outdoor_c.toFixed(1)}°C outside`)
+  tempText.font = Font.systemFont(15)
+  tempText.textColor = new Color("#ffffff", 0.85)
+  tempText.rightAlignText()
+  right.addSpacer(4)
 }
 
-// Thresholds
 if (data?.close_above_c != null) {
-  const threshText = widget.addText(`Close >${data.close_above_c}° / Open <${data.open_below_c}°`)
+  const threshText = right.addText(`Close >${data.close_above_c}°  Open <${data.open_below_c}°`)
   threshText.font = Font.systemFont(11)
-  threshText.textColor = new Color(theme.text.hex, 0.5)
+  threshText.textColor = new Color("#ffffff", 0.35)
+  threshText.rightAlignText()
+  right.addSpacer(8)
 }
 
-widget.addSpacer()
-
-// Last updated
-const updatedText = widget.addText(`Updated ${timeAgo(data?.updated_utc)}`)
-updatedText.font = Font.systemFont(10)
-updatedText.textColor = new Color(theme.text.hex, 0.4)
+const updatedText = right.addText(`Updated ${timeAgo(data?.updated_utc)}`)
+updatedText.font = Font.systemFont(11)
+updatedText.textColor = new Color("#ffffff", 0.3)
+updatedText.rightAlignText()
 
 Script.setWidget(widget)
-widget.presentSmall()
+widget.presentMedium()
 Script.complete()
