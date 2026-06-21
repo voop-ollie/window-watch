@@ -264,21 +264,35 @@
         balance.style.display = "none"
       }
 
-      // Forecast block
+      // Forecast block — only show times still in the future
       const fc = document.getElementById("forecast")
-      if (d.forecast_close_hour != null) {
+      const nowHour = new Date().getHours()
+      const closeFuture = d.forecast_close_hour != null && d.forecast_close_hour >= nowHour
+      const openFuture = d.forecast_open_hour != null && d.forecast_open_hour >= nowHour
+      const peakLine = d.forecast_max_c != null && d.forecast_peak_hour != null
+        ? `<div class="forecast-peak">Today peaks at ${d.forecast_max_c.toFixed(0)}°C around ${fmtHour(d.forecast_peak_hour)}</div>`
+        : ""
+
+      if (closeFuture) {
         fc.style.display = ""
         fc.className = "forecast warn"
         let html = `Close before <strong>${fmtHour(d.forecast_close_hour)}</strong>`
-        if (d.forecast_open_hour != null) {
+        if (openFuture) {
           html += ` · open after <strong>${fmtHour(d.forecast_open_hour)}</strong>`
+        } else if (d.forecast_open_hour != null) {
+          html += ` · open up from <strong>${fmtHour(d.forecast_open_hour)}</strong>`
         } else {
           html += ` · may stay hot overnight`
         }
-        if (d.forecast_max_c != null && d.forecast_peak_hour != null) {
-          html += `<div class="forecast-peak">Today peaks at ${d.forecast_max_c.toFixed(0)}°C around ${fmtHour(d.forecast_peak_hour)}</div>`
-        }
-        fc.innerHTML = html
+        fc.innerHTML = html + peakLine
+      } else if (openFuture) {
+        fc.style.display = ""
+        fc.className = "forecast"
+        fc.innerHTML = `Open after <strong>${fmtHour(d.forecast_open_hour)}</strong>` + peakLine
+      } else if (d.forecast_close_hour != null && d.forecast_open_hour == null && d.status === "close") {
+        fc.style.display = ""
+        fc.className = "forecast"
+        fc.innerHTML = `May stay hot overnight` + peakLine
       } else {
         fc.style.display = "none"
       }

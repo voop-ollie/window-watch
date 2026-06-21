@@ -107,12 +107,20 @@ if (data?.indoor_est_c != null) {
   right.addSpacer(5)
 }
 
-// Forecast line — most actionable info
-if (data?.forecast_close_hour != null) {
-  let fcLine = `Close before ${fmtHour(data.forecast_close_hour)}`
+// Forecast line — only show times still in the future
+const nowHour = new Date().getHours()
+const closeFuture = data?.forecast_close_hour != null && data.forecast_close_hour >= nowHour
+const openFuture = data?.forecast_open_hour != null && data.forecast_open_hour >= nowHour
+let fcLine = null
+if (closeFuture) {
+  fcLine = `Close before ${fmtHour(data.forecast_close_hour)}`
   if (data.forecast_open_hour != null) {
     fcLine += ` · open after ${fmtHour(data.forecast_open_hour)}`
   }
+} else if (openFuture) {
+  fcLine = `Open after ${fmtHour(data.forecast_open_hour)}`
+}
+if (fcLine) {
   const fcText = right.addText(fcLine)
   fcText.font = Font.systemFont(12)
   fcText.textColor = new Color("#ffd060", 0.9)
