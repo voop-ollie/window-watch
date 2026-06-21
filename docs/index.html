@@ -77,6 +77,49 @@
       opacity: 0.35;
     }
 
+    .balance { width: 100%; margin-bottom: 32px; }
+    .balance-track {
+      position: relative; height: 6px; border-radius: 3px;
+      background: rgba(255,255,255,0.12); margin: 10px 0 8px;
+    }
+    .balance-bg-cool {
+      position: absolute; left: 0; top: 0; bottom: 0; width: 50%;
+      background: rgba(77,182,255,0.25); border-radius: 3px 0 0 3px;
+    }
+    .balance-bg-warm {
+      position: absolute; right: 0; top: 0; bottom: 0; width: 50%;
+      background: rgba(255,120,100,0.25); border-radius: 0 3px 3px 0;
+    }
+    .balance-deadband {
+      position: absolute; top: -2px; bottom: -2px; border-radius: 1px;
+      background: rgba(255,255,255,0.06);
+      border-left: 1px solid rgba(255,255,255,0.12);
+      border-right: 1px solid rgba(255,255,255,0.12);
+    }
+    .balance-needle {
+      position: absolute; left: 50%; top: -4px; bottom: -4px; width: 1.5px;
+      transform: translateX(-50%); background: rgba(255,255,255,0.45); border-radius: 1px;
+    }
+    .balance-fill {
+      position: absolute; top: 0; bottom: 0; border-radius: 3px;
+      transition: left 0.5s ease, width 0.5s ease, background 0.4s ease;
+    }
+    .balance-ball {
+      position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%;
+      transform: translate(-50%, -50%);
+      border: 2px solid rgba(0,0,0,0.2);
+      transition: left 0.5s ease, background 0.4s ease;
+    }
+    .balance-labels {
+      display: flex; justify-content: space-between;
+      font-size: 11px; opacity: 0.35;
+    }
+    .balance-temps {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px; opacity: 0.55;
+    }
+    .balance-delta { font-size: 12px; opacity: 0.55; }
+
     .refresh-btn {
       margin-top: 20px;
       background: rgba(255,255,255,0.1);
@@ -114,7 +157,26 @@
     <div class="status" id="status">—</div>
     <div class="hint" id="hint">loading…</div>
     <div class="temp" id="temp">—<span>°C</span></div>
-    <div class="thresholds" id="thresholds"></div>
+    <div class="balance" id="balance" style="display:none">
+      <div class="balance-track">
+        <div class="balance-bg-cool"></div>
+        <div class="balance-bg-warm"></div>
+        <div class="balance-deadband" id="balance-deadband"></div>
+        <div class="balance-fill" id="balance-fill"></div>
+        <div class="balance-needle"></div>
+        <div class="balance-ball" id="balance-ball"></div>
+      </div>
+      <div class="balance-labels">
+        <span>← open</span>
+        <span>equilibrium</span>
+        <span>close →</span>
+      </div>
+      <div class="balance-temps" style="margin-top:6px">
+        <span id="balance-indoor-label"></span>
+        <span class="balance-delta" id="balance-delta"></span>
+        <span id="balance-outdoor-label"></span>
+      </div>
+    </div>
     <div class="forecast" id="forecast" style="display:none"></div>
     <div class="updated"><span class="dot"></span><span id="updated">checking…</span><span id="checked"></span></div>
     <button class="refresh-btn" id="refresh-btn" onclick="manualRefresh()">Refresh</button>
@@ -169,11 +231,38 @@
       document.getElementById("status").textContent = copy.label
       document.getElementById("hint").textContent = copy.hint
       document.getElementById("temp").innerHTML = d.outdoor_c != null
-        ? `${d.outdoor_c.toFixed(1)}<span>°C outside</span>`
+        ? `${d.outdoor_c.toFixed(1)}<span>°C</span>`
         : `—<span>°C</span>`
-      document.getElementById("thresholds").textContent = d.indoor_est_c != null
-        ? `~${d.indoor_est_c.toFixed(0)}°C estimated inside`
-        : ""
+      const balance = document.getElementById("balance")
+      if (d.outdoor_c != null && d.indoor_est_c != null) {
+        balance.style.display = ""
+        const RANGE = 8, HYST = 1.5
+        const delta = d.outdoor_c - d.indoor_est_c
+        const pct = Math.min(95, Math.max(5, 50 + (delta / RANGE) * 50))
+        const deadPct = (HYST / RANGE) * 50
+        document.getElementById("balance-deadband").style.left = (50 - deadPct) + "%"
+        document.getElementById("balance-deadband").style.width = (deadPct * 2) + "%"
+        const ball = document.getElementById("balance-ball")
+        const fill = document.getElementById("balance-fill")
+        ball.style.left = pct + "%"
+        if (delta > HYST) {
+          fill.style.left = "50%"; fill.style.width = (pct - 50) + "%"
+          fill.style.background = "rgba(255,120,100,0.55)"; ball.style.background = "#ff8c8c"
+        } else if (delta < -HYST) {
+          fill.style.left = pct + "%"; fill.style.width = (50 - pct) + "%"
+          fill.style.background = "rgba(77,182,255,0.55)"; ball.style.background = "#4db6ff"
+        } else {
+          fill.style.width = "0%"; ball.style.background = "rgba(255,255,255,0.65)"
+        }
+        document.getElementById("balance-indoor-label").textContent = `~${d.indoor_est_c.toFixed(0)}°C inside`
+        document.getElementById("balance-outdoor-label").textContent = `${d.outdoor_c.toFixed(1)}°C outside`
+        const absDelta = Math.abs(delta)
+        document.getElementById("balance-delta").textContent =
+          absDelta < HYST ? "in balance" :
+          delta > 0 ? `+${delta.toFixed(1)}° warmer outside` : `${delta.toFixed(1)}° cooler outside`
+      } else {
+        balance.style.display = "none"
+      }
 
       // Forecast block
       const fc = document.getElementById("forecast")
