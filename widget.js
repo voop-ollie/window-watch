@@ -4,9 +4,9 @@
 const GIST_URL = "https://gist.githubusercontent.com/voop-ollie/bd24c63bd7e129c86942db6ed67f9008/raw/window-watch-status.json"
 
 const COLORS = {
-  open:    { bg: new Color("#0f3460"), text: new Color("#e0f0ff"), emoji: "🪟" },
-  close:   { bg: new Color("#7b1e1e"), text: new Color("#ffe8e8"), emoji: "🔒" },
-  unknown: { bg: new Color("#2a2a2a"), text: new Color("#cccccc"), emoji: "❓" },
+  open:    { bg: new Color("#0f3460"), text: new Color("#e0f0ff"), label: "OPEN" },
+  close:   { bg: new Color("#7b1e1e"), text: new Color("#ffe8e8"), label: "CLOSE" },
+  unknown: { bg: new Color("#2a2a2a"), text: new Color("#cccccc"), label: "—" },
 }
 
 async function fetchStatus() {
@@ -34,17 +34,9 @@ const widget = new ListWidget()
 widget.backgroundColor = theme.bg
 widget.setPadding(14, 16, 14, 16)
 
-// Top row: emoji + status
-const top = widget.addStack()
-top.layoutHorizontally()
-top.centerAlignContent()
-
-const emojiText = top.addText(theme.emoji)
-emojiText.font = Font.systemFont(28)
-top.addSpacer(8)
-
-const stateText = top.addText(status === "unknown" ? "—" : status.toUpperCase())
-stateText.font = Font.boldSystemFont(26)
+// Status label
+const stateText = widget.addText(theme.label)
+stateText.font = Font.boldSystemFont(32)
 stateText.textColor = theme.text
 
 widget.addSpacer(8)
