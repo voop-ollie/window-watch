@@ -31,8 +31,8 @@ from datetime import datetime, timezone
 LAT = os.getenv("LAT") or "51.527"
 LON = os.getenv("LON") or "-0.021"
 WEATHER_MODEL = os.getenv("WEATHER_MODEL") or "icon_d2"
-CLOSE_ABOVE = float(os.getenv("CLOSE_ABOVE") or "22")
-OPEN_BELOW = float(os.getenv("OPEN_BELOW") or "20")
+CLOSE_ABOVE = float(os.getenv("CLOSE_ABOVE") or "25")
+OPEN_BELOW = float(os.getenv("OPEN_BELOW") or "23")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
