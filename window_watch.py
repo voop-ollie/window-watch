@@ -229,11 +229,11 @@ def main():
         forecast_max = max(t for _, t in forecast)
         forecast_peak_hour = next(h for h, t in forecast if t == forecast_max)
         forecast_close_hour = next((h for h, t in forecast if t >= CLOSE_ABOVE), None)
+        indoor_est = estimate_indoor(forecast)
         forecast_open_hour = next(
             (h for h, t in forecast if h > (forecast_peak_hour or 0) and t <= indoor_est - HYSTERESIS),
             None,
         )
-        indoor_est = estimate_indoor(forecast)
     except Exception as e:
         print(f"[warn] Forecast fetch failed: {e}", file=sys.stderr)
 
