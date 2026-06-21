@@ -28,8 +28,8 @@ import sys
 import urllib.parse
 import urllib.request
 
-LAT = os.getenv("LAT", "51.5128")
-LON = os.getenv("LON", "-0.0566")
+LAT = os.getenv("LAT") or "51.5128"
+LON = os.getenv("LON") or "-0.0566"
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 HYST = float(os.getenv("HYSTERESIS", "1.5"))
