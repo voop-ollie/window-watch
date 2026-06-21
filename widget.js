@@ -124,10 +124,10 @@ let fcLine = null
 if (closeFuture) {
   fcLine = `Close before ${fmtHourApprox(data.forecast_close_hour)}`
   if (data.forecast_open_hour != null) {
-    fcLine += ` · open after ${fmtHourApprox(data.forecast_open_hour)}`
+    fcLine += ` · open around ${fmtHourApprox(data.forecast_open_hour)}`
   }
 } else if (openFuture) {
-  fcLine = `Open after ${fmtHourApprox(data.forecast_open_hour)}`
+  fcLine = `Open around ${fmtHourApprox(data.forecast_open_hour)}`
 }
 if (fcLine) {
   const fcText = right.addText(fcLine)

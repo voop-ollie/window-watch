@@ -287,9 +287,9 @@
         fc.className = "forecast warn"
         let html = `Close before <strong>${fmtHourApprox(d.forecast_close_hour)}</strong>`
         if (openFuture) {
-          html += ` · open after <strong>${fmtHourApprox(d.forecast_open_hour)}</strong>`
+          html += ` · open around <strong>${fmtHourApprox(d.forecast_open_hour)}</strong>`
         } else if (d.forecast_open_hour != null) {
-          html += ` · open up from <strong>${fmtHourApprox(d.forecast_open_hour)}</strong>`
+          html += ` · open around <strong>${fmtHourApprox(d.forecast_open_hour)}</strong>`
         } else {
           html += ` · may stay hot overnight`
         }
@@ -297,7 +297,7 @@
       } else if (openFuture) {
         fc.style.display = ""
         fc.className = "forecast"
-        fc.innerHTML = `Open after <strong>${fmtHourApprox(d.forecast_open_hour)}</strong>` + peakLine
+        fc.innerHTML = `Open around <strong>${fmtHourApprox(d.forecast_open_hour)}</strong>` + peakLine
       } else if (d.forecast_close_hour != null && d.forecast_open_hour == null && d.status === "close") {
         fc.style.display = ""
         fc.className = "forecast"

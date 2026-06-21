@@ -45,7 +45,7 @@ CLOSE_ABOVE = float(os.getenv("CLOSE_ABOVE") or "25")    # still used for foreca
 THERMAL_ALPHA = float(os.getenv("THERMAL_ALPHA") or "0.18")   # heat bleed-in per hour
 INDOOR_BASE = float(os.getenv("INDOOR_BASE") or "19.0")        # overnight cool-down target
 SOLAR_GAIN = float(os.getenv("SOLAR_GAIN") or "3.0")           # south-facing solar load added during daylight (°C)
-HYSTERESIS = float(os.getenv("HYSTERESIS") or "0.5")           # dead band to prevent flapping
+HYSTERESIS = float(os.getenv("HYSTERESIS") or "1.0")           # dead band to prevent flapping
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
@@ -219,11 +219,11 @@ def daily_summary(outdoor):
     if close_hour is not None:
         title = f"Close before {fmt_hour_approx(close_hour)}"
         if open_hour is not None:
-            title += f" · open after {fmt_hour_approx(open_hour)}"
+            title += f" · open around {fmt_hour_approx(open_hour)}"
         body = (
             f"Peak {max_temp:.0f}°C around {fmt_hour(max_hour)}. "
             f"Shut windows before {fmt_hour_approx(close_hour)}"
-            + (f" and open up again after {fmt_hour_approx(open_hour)}." if open_hour else " — may stay hot into the evening.")
+            + (f" and open up again around {fmt_hour_approx(open_hour)}." if open_hour else " — may stay hot into the evening.")
         )
         notify(title, body, tags="house,sunny", priority="high")
     elif max_temp >= INDOOR_BASE + 3:
