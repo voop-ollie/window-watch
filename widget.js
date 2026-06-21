@@ -99,6 +99,9 @@ updatedText.font = Font.systemFont(11)
 updatedText.textColor = new Color("#ffffff", 0.3)
 updatedText.rightAlignText()
 
+// Hint iOS to refresh in sync with the 30-min workflow
+widget.refreshAfterDate = new Date(Date.now() + 30 * 60 * 1000)
+
 Script.setWidget(widget)
 widget.presentMedium()
 Script.complete()
