@@ -1,0 +1,49 @@
+name: window-watch
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min (UTC). GitHub may delay during busy periods.
+  workflow_dispatch: {}        # lets you run it manually to test
+
+# Avoid overlapping runs
+concurrency:
+  group: window-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      # Carry the last "open/close" state between runs so we only buzz on changes
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: window-state-${{ github.run_id }}
+          restore-keys: window-state-
+
+      - name: Check temperatures
+        env:
+          LAT: ${{ vars.LAT }}
+          LON: ${{ vars.LON }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          VAILLANT_USER: ${{ secrets.VAILLANT_USER }}
+          VAILLANT_PASS: ${{ secrets.VAILLANT_PASS }}
+          VAILLANT_COUNTRY: unitedkingdom
+          INDOOR_FALLBACK: "22"
+        run: python window_watch.py
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: window-state-${{ github.run_id }}
