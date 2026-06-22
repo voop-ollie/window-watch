@@ -233,11 +233,11 @@
     const HYSTERESIS = 1.0  // must match Python default
 
     function liveTemps(d) {
-      // Between actual refreshes, interpolate from the stored hourly forecast
+      // Interpolate outdoor from forecast between runs; indoor is always the real sensor reading
       if (d.forecast_hourly) {
         const nowHour = new Date().getHours()
         const entry = d.forecast_hourly.find(e => e[0] === nowHour)
-        if (entry) return { outdoor: entry[1], indoor: entry[2], isForecast: true }
+        if (entry) return { outdoor: entry[1], indoor: d.indoor_est_c, isForecast: true }
       }
       return { outdoor: d.outdoor_c, indoor: d.indoor_est_c, isForecast: false }
     }
