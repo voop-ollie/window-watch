@@ -50,6 +50,9 @@ NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
 DASHBOARD_GIST_ID = "bd24c63bd7e129c86942db6ed67f9008"
+SHELLY_AUTH_KEY = os.getenv("SHELLY_AUTH_KEY")
+SHELLY_DEVICE_ID = os.getenv("SHELLY_DEVICE_ID")
+SHELLY_SERVER = os.getenv("SHELLY_SERVER")
 
 
 def get_outdoor():
@@ -105,6 +108,24 @@ def estimate_indoor(forecast):
         if h >= current_hour:
             break
     return indoor
+
+
+def get_indoor_shelly():
+    """Return live indoor temp from Shelly Cloud API, or None on failure."""
+    if not (SHELLY_AUTH_KEY and SHELLY_DEVICE_ID and SHELLY_SERVER):
+        return None
+    url = f"https://{SHELLY_SERVER}/device/status"
+    data = urllib.parse.urlencode({"auth_key": SHELLY_AUTH_KEY, "id": SHELLY_DEVICE_ID}).encode()
+    req = urllib.request.Request(url, data=data, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            resp = json.load(r)
+        if not resp.get("isok"):
+            return None
+        return float(resp["data"]["device_status"]["temperature:0"]["tC"])
+    except Exception as e:
+        print(f"[warn] Shelly fetch failed: {e}", file=sys.stderr)
+        return None
 
 
 def decide(outdoor, indoor_est, last):
@@ -257,7 +278,7 @@ def main():
         forecast_max = max(t for _, t in forecast)
         forecast_peak_hour = next(h for h, t in forecast if t == forecast_max)
         indoor_sim = simulate_indoor_day(forecast)
-        indoor_est = estimate_indoor(forecast)
+        indoor_est = get_indoor_shelly() or estimate_indoor(forecast)
         forecast_hourly = [[h, t_out, t_in] for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)]
         # Use simulated indoor at each forecast hour for consistent thermal comparisons
         forecast_close_hour = next(

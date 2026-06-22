@@ -43,6 +43,9 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           CLOSE_ABOVE: ${{ vars.CLOSE_ABOVE }}
           GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
+          SHELLY_AUTH_KEY: ${{ secrets.SHELLY_AUTH_KEY }}
+          SHELLY_DEVICE_ID: ${{ secrets.SHELLY_DEVICE_ID }}
+          SHELLY_SERVER: ${{ secrets.SHELLY_SERVER }}
           DAILY_SUMMARY: ${{ github.event.schedule == '10 7 * * *' || inputs.daily_summary == true }}
         run: python window_watch.py
 
