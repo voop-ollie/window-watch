@@ -253,14 +253,27 @@ def log_history(outdoor_data, indoor_c, indoor_humidity, battery_pct, status):
             f"{battery_pct if battery_pct is not None else ''},"
             f"{status}\n"
         )
-        payload = json.dumps({"files": {"window-watch-history.csv": {"content": existing + row}}})
-        patch = urllib.request.Request(base, data=payload.encode(), method="PATCH")
-        patch.add_header("Authorization", f"token {token}")
-        patch.add_header("Accept", "application/vnd.github+json")
-        patch.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(patch, timeout=20) as r:
-            r.read()
-        print("History logged.")
+        import time
+        for attempt in range(3):
+            if attempt:
+                time.sleep(2 ** attempt)
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    gist = json.load(r)
+                existing = gist["files"].get("window-watch-history.csv", {}).get("content", HISTORY_HEADER)
+            payload = json.dumps({"files": {"window-watch-history.csv": {"content": existing + row}}})
+            patch = urllib.request.Request(base, data=payload.encode(), method="PATCH")
+            patch.add_header("Authorization", f"token {token}")
+            patch.add_header("Accept", "application/vnd.github+json")
+            patch.add_header("Content-Type", "application/json")
+            try:
+                with urllib.request.urlopen(patch, timeout=20) as r:
+                    r.read()
+                print("History logged.")
+                break
+            except urllib.error.HTTPError as e:
+                if e.code == 409 and attempt < 2:
+                    continue
+                raise
     except Exception as e:
         print(f"[warn] History log failed: {e}", file=sys.stderr)
 
