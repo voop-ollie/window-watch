@@ -199,6 +199,33 @@ def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, fore
         print(f"[warn] Dashboard update failed: {e}", file=sys.stderr)
 
 
+def log_history(outdoor, indoor, status):
+    """Append a CSV row to the history file in the dashboard Gist."""
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        return
+    base = f"https://api.github.com/gists/{DASHBOARD_GIST_ID}"
+    req = urllib.request.Request(base)
+    req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            gist = json.load(r)
+        existing = gist["files"].get("window-watch-history.csv", {}).get("content", "timestamp,outdoor_c,indoor_c,status\n")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        new_content = existing + f"{ts},{outdoor},{indoor},{status}\n"
+        payload = json.dumps({"files": {"window-watch-history.csv": {"content": new_content}}})
+        patch = urllib.request.Request(base, data=payload.encode(), method="PATCH")
+        patch.add_header("Authorization", f"token {token}")
+        patch.add_header("Accept", "application/vnd.github+json")
+        patch.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(patch, timeout=20) as r:
+            r.read()
+        print("History logged.")
+    except Exception as e:
+        print(f"[warn] History log failed: {e}", file=sys.stderr)
+
+
 def fmt_hour(h):
     if h == 0:   return "midnight"
     if h < 12:   return f"{h}am"
@@ -333,6 +360,7 @@ def main():
 
     save_state(status)
     update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, forecast_close_hour, forecast_open_hour, forecast_hourly)
+    log_history(outdoor, indoor_est, status)
 
 
 if __name__ == "__main__":
