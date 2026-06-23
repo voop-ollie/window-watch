@@ -50,6 +50,7 @@ NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
 DASHBOARD_GIST_ID = "bd24c63bd7e129c86942db6ed67f9008"
+DASHBOARD_URL = "https://voop-ollie.github.io/window-watch/"
 SHELLY_AUTH_KEY = os.getenv("SHELLY_AUTH_KEY")
 SHELLY_DEVICE_ID = os.getenv("SHELLY_DEVICE_ID")
 SHELLY_SERVER = os.getenv("SHELLY_SERVER")
@@ -175,6 +176,7 @@ def notify(title, body, tags, priority="default"):
     req.add_header("Title", title)
     req.add_header("Tags", tags)
     req.add_header("Priority", priority)
+    req.add_header("Click", DASHBOARD_URL)
     with urllib.request.urlopen(req, timeout=20) as r:
         r.read()
 
@@ -393,8 +395,14 @@ def main():
         else:
             peak_ctx = None
 
+        # Use precise reading when Shelly is live; flag as estimate otherwise
+        if shelly:
+            indoor_label = f"{indoor_est:.1f}°C inside"
+        else:
+            indoor_label = f"~{indoor_est:.0f}°C estimated inside"
+
         if last is None:
-            body = f"Outside {outdoor:.1f}°C, ~{indoor_est:.0f}°C estimated inside. "
+            body = f"Outside {outdoor:.1f}°C, {indoor_label}. "
             if peak_ctx:
                 body += f"Today {peak_ctx}. "
             body += f"Windows should be: {status}."
@@ -402,7 +410,7 @@ def main():
 
         elif status == "close":
             body = (
-                f"Outside {outdoor:.1f}°C — warmer than estimated {indoor_est:.0f}°C inside. "
+                f"Outside {outdoor:.1f}°C — warmer than {indoor_label}. "
                 + (f"Today {peak_ctx}. " if peak_ctx else "")
                 + "Shut windows, doors and blinds."
             )
@@ -410,7 +418,7 @@ def main():
 
         elif status == "open":
             body = (
-                f"Outside dropped to {outdoor:.1f}°C — cooler than estimated {indoor_est:.0f}°C inside. "
+                f"Outside dropped to {outdoor:.1f}°C — cooler than {indoor_label}. "
                 "Open up and flush the heat out."
             )
             notify("Open up", body, tags="house,leaves")
