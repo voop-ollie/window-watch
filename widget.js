@@ -1,8 +1,19 @@
 // Window Watch — Scriptable widget (medium / full-width)
-// Install: paste into a new Scriptable script, add to home screen as a Medium widget
+// Install: paste into a new Scriptable script named "Window Watch",
+// then add to home screen as a Medium widget.
 
 const GIST_API_URL = "https://api.github.com/gists/bd24c63bd7e129c86942db6ed67f9008"
 const DASHBOARD_URL = "https://voop-ollie.github.io/window-watch/"
+const SCRIPT_NAME   = "Window Watch"  // must match the name in Scriptable
+
+// When tapped, the widget deep-links back into Scriptable which runs this
+// script again — but outside widget context. We detect that and open the
+// dashboard in an in-app sheet (no new Safari tab) then exit.
+if (!config.runsInWidget) {
+  await Safari.openInApp(DASHBOARD_URL, false)
+  Script.complete()
+  return
+}
 
 const THEME = {
   open: {
@@ -70,7 +81,7 @@ const theme = THEME[status] ?? THEME.unknown
 const widget = new ListWidget()
 widget.backgroundColor = theme.bg
 widget.setPadding(14, 18, 14, 18)
-// No widget.url — tapping does nothing rather than spawning a new Safari tab each time
+widget.url = `scriptable:///run?scriptName=${encodeURIComponent(SCRIPT_NAME)}`
 widget.refreshAfterDate = new Date(Date.now() + 30 * 60 * 1000)
 
 // ── Row: left status + right details ────────
