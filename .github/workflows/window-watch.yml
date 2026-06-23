@@ -1,9 +1,7 @@
 name: window-watch
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"   # every 30 min — state-change alerts
-    - cron: "10 7 * * *"     # 8:10am BST (7:10 UTC) — morning forecast brief
+  # Scheduling moved to Fly.io (runner.py) — keeping workflow_dispatch for manual one-off runs
   workflow_dispatch:
     inputs:
       daily_summary:
