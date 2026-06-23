@@ -338,6 +338,17 @@
       btn.disabled = true
       btn.textContent = "Refreshing…"
       document.getElementById("checked").textContent = ""
+
+      // Ask the Fly runner to do a full refresh (both weather API + Shelly)
+      try {
+        await fetch("https://window-watch-ollie.fly.dev/refresh", {
+          method: "POST",
+          headers: { "Authorization": "Bearer yKkEP4_tiXaXMUh9AR-fkALJjHNHtK6D" },
+        })
+        // Give the runner a moment to fetch APIs and write the Gist
+        await new Promise(r => setTimeout(r, 4000))
+      } catch (_) { /* fall through to re-read existing Gist */ }
+
       await load()
       btn.textContent = "Refresh"
       btn.disabled = false
