@@ -230,7 +230,8 @@
       }
     }
 
-    const HYSTERESIS = 1.0  // must match Python default
+    const HYSTERESIS = 1.0  // reopen band — must match Python default
+    const CLOSE_LEAD = 0.5  // anticipatory close margin — must match Python default
 
     function liveTemps(d) {
       // Interpolate outdoor from forecast between runs; indoor is always the real sensor reading
@@ -247,10 +248,12 @@
       const d = lastData
       const { outdoor, indoor, isForecast } = liveTemps(d)
 
-      // Re-derive status from live temps so the display stays current between runs
+      // Re-derive status from live temps so the display stays current between runs.
+      // Asymmetric: close at the crossover (don't wait — late closing traps heat),
+      // reopen only once genuinely cooler. In between, hold the server's decision.
       let s = d.status || "unknown"
       if (outdoor != null && indoor != null) {
-        if (outdoor >= indoor + HYSTERESIS)      s = "close"
+        if (outdoor >= indoor)                   s = "close"
         else if (outdoor <= indoor - HYSTERESIS) s = "open"
       }
       const copy = COPY[s] || COPY.unknown
@@ -267,16 +270,18 @@
         const RANGE = 8
         const delta = outdoor - indoor
         const pct = Math.min(95, Math.max(5, 50 + (delta / RANGE) * 50))
+        // Hold zone sits between the reopen point (indoor - HYSTERESIS) and the
+        // crossover (indoor, at centre) — to the right of centre means close.
         const deadPct = (HYSTERESIS / RANGE) * 50
         document.getElementById("balance-deadband").style.left = (50 - deadPct) + "%"
-        document.getElementById("balance-deadband").style.width = (deadPct * 2) + "%"
+        document.getElementById("balance-deadband").style.width = deadPct + "%"
         const ball = document.getElementById("balance-ball")
         const fill = document.getElementById("balance-fill")
         ball.style.left = pct + "%"
-        if (delta > HYSTERESIS) {
+        if (delta >= 0) {
           fill.style.left = "50%"; fill.style.width = (pct - 50) + "%"
           fill.style.background = "rgba(255,120,100,0.55)"; ball.style.background = "#ff8c8c"
-        } else if (delta < -HYSTERESIS) {
+        } else if (delta <= -HYSTERESIS) {
           fill.style.left = pct + "%"; fill.style.width = (50 - pct) + "%"
           fill.style.background = "rgba(77,182,255,0.55)"; ball.style.background = "#4db6ff"
         } else {
@@ -284,10 +289,10 @@
         }
         document.getElementById("balance-indoor-label").textContent = `${isForecast ? "~" : ""}${indoor.toFixed(1)}°C inside`
         document.getElementById("balance-outdoor-label").textContent = `${isForecast ? "~" : ""}${outdoor.toFixed(1)}°C outside`
-        const absDelta = Math.abs(delta)
         document.getElementById("balance-delta").textContent =
-          absDelta < HYSTERESIS ? "in balance" :
-          delta > 0 ? `+${delta.toFixed(1)}° warmer outside` : `${delta.toFixed(1)}° cooler outside`
+          delta >= 0 ? `+${delta.toFixed(1)}° warmer outside` :
+          delta <= -HYSTERESIS ? `${delta.toFixed(1)}° cooler outside` :
+          "holding — barely cooler out"
       } else {
         balance.style.display = "none"
       }

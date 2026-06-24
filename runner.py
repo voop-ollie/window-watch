@@ -47,6 +47,18 @@ def morning_brief():
 
 
 class RefreshHandler(BaseHTTPRequestHandler):
+    def _cors(self):
+        # Dashboard is served cross-origin (GitHub Pages -> fly.dev), so it sends a
+        # CORS preflight before the POST. Allow it, plus the Authorization header.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors()
+        self.end_headers()
+
     def do_POST(self):
         if self.path != "/refresh":
             self.send_response(404)
@@ -56,10 +68,12 @@ class RefreshHandler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         if REFRESH_TOKEN and auth != f"Bearer {REFRESH_TOKEN}":
             self.send_response(401)
+            self._cors()
             self.end_headers()
             return
 
         self.send_response(200)
+        self._cors()
         self.end_headers()
         # Run in background so HTTP response returns immediately
         threading.Thread(target=check, daemon=True).start()

@@ -45,7 +45,8 @@ CLOSE_ABOVE = float(os.getenv("CLOSE_ABOVE") or "25")    # still used for foreca
 THERMAL_ALPHA = float(os.getenv("THERMAL_ALPHA") or "0.18")   # heat bleed-in per hour
 INDOOR_BASE = float(os.getenv("INDOOR_BASE") or "19.0")        # overnight cool-down target
 SOLAR_GAIN = float(os.getenv("SOLAR_GAIN") or "3.0")           # south-facing solar load added during daylight (°C)
-HYSTERESIS = float(os.getenv("HYSTERESIS") or "1.0")           # dead band to prevent flapping
+HYSTERESIS = float(os.getenv("HYSTERESIS") or "1.0")           # reopen dead band — only reopen once genuinely cooler
+CLOSE_LEAD = float(os.getenv("CLOSE_LEAD") or "0.5")           # anticipation margin — close this many °C before the crossover while outdoor is still climbing
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
@@ -123,6 +124,58 @@ def estimate_indoor(forecast):
     return indoor
 
 
+def project_indoor(forecast, indoor_now, from_hour):
+    """Project indoor temp forward from a *real* reading at from_hour.
+
+    Anchoring to the live sensor (rather than a fictional overnight minimum) is
+    what makes the close/open predictions match reality — a flat that never
+    cools below 25°C overnight shouldn't be told to close at 8am for 24°C air.
+    Hours before from_hour are returned as None (no projection backwards).
+    """
+    indoor = indoor_now
+    result = []
+    for h, outdoor in forecast:
+        if h < from_hour:
+            result.append((h, None))
+            continue
+        if h > from_hour:
+            effective = outdoor + (SOLAR_GAIN if 7 <= h <= 19 else 0)
+            indoor = THERMAL_ALPHA * effective + (1 - THERMAL_ALPHA) * indoor
+        result.append((h, round(indoor, 1)))
+    return result
+
+
+def forecast_windows(forecast, indoor_now=None):
+    """Return (close_hour, open_hour, max_temp, peak_hour) for today.
+
+    The close moment is the *crossover* — when outdoor first rises to meet indoor
+    (no hysteresis: being late traps warm air). The open moment is the first hour
+    after the peak where outdoor falls a full HYSTERESIS below indoor (patient, so
+    we don't reopen on a brief dip). When a live indoor reading is supplied the
+    indoor curve is projected forward from it; otherwise the model-only sim is used.
+    """
+    max_temp = max(t for _, t in forecast)
+    peak_hour = next(h for h, t in forecast if t == max_temp)
+    if indoor_now is not None:
+        current_hour = datetime.now(timezone.utc).hour + 1  # UTC+1 approximates BST
+        curve = project_indoor(forecast, indoor_now, current_hour)
+        start = current_hour
+    else:
+        curve = simulate_indoor_day(forecast)
+        start = 6
+    close_hour = next(
+        (h for (h, t_out), (_, t_in) in zip(forecast, curve)
+         if t_in is not None and h >= start and t_out >= t_in),
+        None,
+    )
+    open_hour = next(
+        (h for (h, t_out), (_, t_in) in zip(forecast, curve)
+         if t_in is not None and h > (peak_hour or 0) and t_out <= t_in - HYSTERESIS),
+        None,
+    )
+    return close_hour, open_hour, max_temp, peak_hour
+
+
 def get_indoor_shelly():
     """Return live indoor readings from Shelly Cloud API, or None on failure."""
     if not (SHELLY_AUTH_KEY and SHELLY_DEVICE_ID and SHELLY_SERVER):
@@ -146,10 +199,18 @@ def get_indoor_shelly():
         return None
 
 
-def decide(outdoor, indoor_est, last):
-    if outdoor >= indoor_est + HYSTERESIS:
+def decide(outdoor, indoor, last, rising=False):
+    """Asymmetric decision: close eagerly, reopen patiently.
+
+    Closing late is the expensive mistake — once outdoor passes indoor, every
+    minute open pours heat in. So we close *at* the crossover, and a touch early
+    (CLOSE_LEAD) while outdoor is still climbing toward it. Reopening only happens
+    once outdoor is a full HYSTERESIS below indoor, so a brief dip won't flap us.
+    """
+    close_thresh = indoor - (CLOSE_LEAD if rising else 0.0)
+    if outdoor >= close_thresh:
         return "close"
-    if outdoor <= indoor_est - HYSTERESIS:
+    if outdoor <= indoor - HYSTERESIS:
         return "open"
     return last or "open"
 
@@ -296,28 +357,16 @@ def fmt_hour_approx(h):
     return f"{r - 12}pm"
 
 
-def daily_summary(outdoor):
+def daily_summary(outdoor, indoor_now=None):
     try:
         forecast = get_forecast()
     except Exception as e:
         print(f"[warn] Forecast fetch failed: {e}", file=sys.stderr)
         return
 
-    max_temp = max(t for _, t in forecast)
-    max_hour = next(h for h, t in forecast if t == max_temp)
-    indoor_sim = simulate_indoor_day(forecast)
-    close_hour = next(
-        (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
-         if h >= 6 and t_out >= t_in + HYSTERESIS),
-        None,
-    )
-    open_hour = next(
-        (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
-         if h > (max_hour or 0) and t_out <= t_in - HYSTERESIS),
-        None,
-    )
+    close_hour, open_hour, max_temp, max_hour = forecast_windows(forecast, indoor_now)
 
-    print(f"daily summary: max={max_temp:.1f}°C at {fmt_hour(max_hour)}  close={close_hour}  open={open_hour}")
+    print(f"daily summary: max={max_temp:.1f}°C at {fmt_hour(max_hour)}  close={close_hour}  open={open_hour}  indoor_now={indoor_now}")
 
     if close_hour is not None:
         title = f"Close before {fmt_hour_approx(close_hour)}"
@@ -358,36 +407,33 @@ def main():
     # Fetch today's forecast; derive indoor estimate and all forward-looking stats
     forecast_max = forecast_peak_hour = forecast_close_hour = forecast_open_hour = None
     forecast_hourly = None
+    rising = False
     indoor_est = INDOOR_BASE
     try:
         forecast = get_forecast()
-        forecast_max = max(t for _, t in forecast)
-        forecast_peak_hour = next(h for h, t in forecast if t == forecast_max)
         indoor_sim = simulate_indoor_day(forecast)
         indoor_est = (shelly["temp"] if shelly else None) or estimate_indoor(forecast)
         forecast_hourly = [[h, t_out, t_in] for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)]
-        # Use simulated indoor at each forecast hour for consistent thermal comparisons
-        forecast_close_hour = next(
-            (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
-             if h >= 6 and t_out >= t_in + HYSTERESIS),
-            None,
+        # Predictions anchored to the live reading when we have one, else model-only
+        forecast_close_hour, forecast_open_hour, forecast_max, forecast_peak_hour = forecast_windows(
+            forecast, shelly["temp"] if shelly else None
         )
-        forecast_open_hour = next(
-            (h for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)
-             if h > (forecast_peak_hour or 0) and t_out <= t_in - HYSTERESIS),
-            None,
-        )
+        # Is outdoor still climbing? (drives anticipatory close)
+        current_hour = datetime.now(timezone.utc).hour + 1
+        temp_now = next((t for h, t in forecast if h == current_hour), outdoor)
+        temp_next = next((t for h, t in forecast if h == current_hour + 1), temp_now)
+        rising = temp_next >= temp_now
     except Exception as e:
         print(f"[warn] Forecast fetch failed: {e}", file=sys.stderr)
 
     if os.getenv("DAILY_SUMMARY") == "true":
-        daily_summary(outdoor)
+        daily_summary(outdoor, shelly["temp"] if shelly else None)
         update_dashboard(outdoor, load_state() or "open", indoor_est, forecast_max, forecast_peak_hour, forecast_close_hour, forecast_open_hour, forecast_hourly)
         return
 
     last = load_state()
-    status = decide(outdoor, indoor_est, last)
-    print(f"outdoor={outdoor:.1f}  indoor_est={indoor_est}  last={last}  -> {status}")
+    status = decide(outdoor, indoor_est, last, rising)
+    print(f"outdoor={outdoor:.1f}  indoor_est={indoor_est}  last={last}  rising={rising}  -> {status}")
 
     if status != last:
         if forecast_max is not None and forecast_peak_hour is not None:
@@ -409,11 +455,18 @@ def main():
             notify("Window Watch running", body, tags="house,white_check_mark")
 
         elif status == "close":
-            body = (
-                f"Outside {outdoor:.1f}°C — warmer than {indoor_label}. "
-                + (f"Today {peak_ctx}. " if peak_ctx else "")
-                + "Shut windows, doors and blinds."
-            )
+            # Anticipatory if outdoor hasn't *quite* crossed indoor yet but is climbing
+            if outdoor < indoor_est:
+                lead = (
+                    f"Outside {outdoor:.1f}°C, about to overtake {indoor_label} and still climbing. "
+                    "Shut windows now to trap the cool while you still can."
+                )
+            else:
+                lead = (
+                    f"Outside {outdoor:.1f}°C — now warmer than {indoor_label}. "
+                    "Shut windows, doors and blinds."
+                )
+            body = lead + (f" Today {peak_ctx}." if peak_ctx else "")
             notify("Close up now", body, tags="house,sunny", priority="high")
 
         elif status == "open":
