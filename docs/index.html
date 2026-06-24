@@ -234,11 +234,19 @@
     const CLOSE_LEAD = 0.5  // anticipatory close margin — must match Python default
 
     function liveTemps(d) {
-      // Interpolate outdoor from forecast between runs; indoor is always the real sensor reading
-      if (d.forecast_hourly) {
+      // Outdoor ticks between refreshes by following the forecast *trend*, but it's
+      // bias-corrected to the last real observed reading (outdoor_c) so it agrees
+      // exactly with the value the decision/notification used at refresh time — the
+      // raw forecast can run several degrees off. Indoor is always the real sensor.
+      if (d.forecast_hourly && d.outdoor_c != null && d.updated_utc) {
+        const fmap = new Map(d.forecast_hourly.map(e => [e[0], e[1]]))
+        const updHour = new Date(d.updated_utc).getHours()
         const nowHour = new Date().getHours()
-        const entry = d.forecast_hourly.find(e => e[0] === nowHour)
-        if (entry) return { outdoor: entry[1], indoor: d.indoor_est_c, isForecast: true }
+        const fcNow = fmap.get(nowHour), fcUpd = fmap.get(updHour)
+        if (fcNow != null && fcUpd != null) {
+          // observed + (how much the forecast says it's moved since the last refresh)
+          return { outdoor: d.outdoor_c + (fcNow - fcUpd), indoor: d.indoor_est_c, isForecast: nowHour !== updHour }
+        }
       }
       return { outdoor: d.outdoor_c, indoor: d.indoor_est_c, isForecast: false }
     }
