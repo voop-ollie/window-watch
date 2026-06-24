@@ -136,6 +136,13 @@
     .refresh-btn:disabled { opacity: 0.4; cursor: default; }
     #checked { margin-left: 8px; opacity: 0.55; }
 
+    .chart-wrap {
+      width: 100%;
+      height: 160px;
+      margin-top: 28px;
+      position: relative;
+    }
+
     .dot {
       display: inline-block;
       width: 7px; height: 7px;
@@ -180,8 +187,12 @@
     <div class="forecast" id="forecast" style="display:none"></div>
     <div class="updated"><span class="dot"></span><span id="updated">checking…</span><span id="checked"></span></div>
     <button class="refresh-btn" id="refresh-btn" onclick="manualRefresh()">Refresh</button>
+    <div class="chart-wrap" id="chart-wrap" style="display:none">
+      <canvas id="temp-chart"></canvas>
+    </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script>
     const GIST_API = "https://api.github.com/gists/bd24c63bd7e129c86942db6ed67f9008"
 
@@ -225,9 +236,180 @@
         lastData = JSON.parse(gist.files["window-watch-status.json"].content)
         lastChecked = new Date()
         updateUI()
+        const csvContent = gist.files["window-watch-history.csv"]?.content
+        if (csvContent) renderChart(parseCSV(csvContent), lastData)
       } catch(e) {
         document.getElementById("hint").textContent = "couldn't load data"
       }
+    }
+
+    function parseCSV(text) {
+      const lines = text.trim().split('\n')
+      const headers = lines[0].split(',')
+      return lines.slice(1).map(line => {
+        const vals = line.split(',')
+        const obj = {}
+        headers.forEach((h, i) => obj[h.trim()] = vals[i]?.trim())
+        return obj
+      }).filter(r => r.timestamp).map(r => ({
+        ts: new Date(r.timestamp).getTime(),
+        outdoor: parseFloat(r.outdoor_c),
+        indoor: parseFloat(r.indoor_c),
+        status: r.status
+      })).filter(r => !isNaN(r.outdoor) && !isNaN(r.indoor))
+    }
+
+    let _chart = null
+
+    function renderChart(rows, d) {
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000
+      const recent = rows.filter(r => r.ts >= cutoff)
+      if (recent.length < 2) return
+
+      // build close-period bands
+      const bands = []
+      let bStart = null
+      recent.forEach(r => {
+        if (r.status === 'close' && bStart == null) bStart = r.ts
+        if (r.status !== 'close' && bStart != null) { bands.push([bStart, r.ts]); bStart = null }
+      })
+      if (bStart != null) bands.push([bStart, recent[recent.length - 1].ts])
+
+      const outdoorHist = recent.map(r => ({ x: r.ts, y: r.outdoor }))
+      const indoorHist  = recent.map(r => ({ x: r.ts, y: r.indoor  }))
+
+      // extend outdoor line forward with bias-corrected forecast
+      const fcPoints = []
+      if (d.forecast_hourly && d.outdoor_c != null) {
+        const fmap = new Map(d.forecast_hourly.map(e => [e[0], e[1]]))
+        const lastRow = recent[recent.length - 1]
+        const lastHour = new Date(lastRow.ts).getHours()
+        const fcAtLast = fmap.get(lastHour)
+        const bias = fcAtLast != null ? lastRow.outdoor - fcAtLast : 0
+        const nowH = new Date().getHours()
+        for (let i = 0; i <= 6; i++) {
+          const h = (nowH + i) % 24
+          const fc = fmap.get(h)
+          if (fc == null) continue
+          const t = new Date(); t.setHours(h, 0, 0, 0)
+          if (nowH + i >= 24) t.setDate(t.getDate() + 1)
+          fcPoints.push({ x: t.getTime(), y: +(fc + bias).toFixed(1) })
+        }
+      }
+
+      const closeBandsPlugin = {
+        id: 'closeBands',
+        beforeDraw(chart) {
+          const { ctx, chartArea: { top, bottom }, scales: { x } } = chart
+          ctx.save()
+          ctx.fillStyle = 'rgba(180, 50, 50, 0.18)'
+          bands.forEach(([s, e]) => {
+            const px0 = x.getPixelForValue(s)
+            const px1 = x.getPixelForValue(e)
+            ctx.fillRect(px0, top, px1 - px0, bottom - top)
+          })
+          ctx.restore()
+        }
+      }
+
+      const wrap = document.getElementById('chart-wrap')
+      wrap.style.display = ''
+      if (_chart) { _chart.destroy(); _chart = null }
+
+      _chart = new Chart(document.getElementById('temp-chart'), {
+        type: 'line',
+        plugins: [closeBandsPlugin],
+        data: {
+          datasets: [
+            {
+              label: 'Outdoor',
+              data: outdoorHist,
+              borderColor: '#ff8c8c',
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0.3,
+              fill: false,
+            },
+            {
+              label: 'Outdoor →',
+              data: fcPoints,
+              borderColor: 'rgba(255,140,140,0.5)',
+              borderWidth: 1.5,
+              borderDash: [4, 3],
+              pointRadius: 0,
+              tension: 0.3,
+              fill: false,
+            },
+            {
+              label: 'Indoor',
+              data: indoorHist,
+              borderColor: '#4db6ff',
+              borderWidth: 2,
+              borderDash: [5, 3],
+              pointRadius: 0,
+              tension: 0.3,
+              fill: false,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            x: {
+              type: 'linear',
+              ticks: {
+                color: 'rgba(255,255,255,0.3)',
+                maxRotation: 0,
+                maxTicksLimit: 6,
+                callback(v) {
+                  const dt = new Date(v), h = dt.getHours()
+                  if (h === 0) return 'midnight'
+                  if (h === 12) return 'noon'
+                  return h < 12 ? `${h}am` : `${h-12}pm`
+                }
+              },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+              border: { display: false }
+            },
+            y: {
+              ticks: {
+                color: 'rgba(255,255,255,0.3)',
+                maxTicksLimit: 4,
+                callback: v => `${v}°`
+              },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+              border: { display: false }
+            }
+          },
+          plugins: {
+            legend: {
+              display: true,
+              labels: {
+                color: 'rgba(255,255,255,0.35)',
+                boxWidth: 24,
+                boxHeight: 2,
+                font: { size: 11 },
+                padding: 12
+              }
+            },
+            tooltip: {
+              backgroundColor: 'rgba(0,0,0,0.75)',
+              titleColor: 'rgba(255,255,255,0.6)',
+              bodyColor: 'rgba(255,255,255,0.85)',
+              callbacks: {
+                title: ([item]) => {
+                  const dt = new Date(item.parsed.x)
+                  return dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+                },
+                label: item => `${item.dataset.label}: ${item.parsed.y?.toFixed(1)}°C`
+              }
+            }
+          }
+        }
+      })
     }
 
     const HYSTERESIS = 1.0  // reopen band — must match Python default
