@@ -17,6 +17,7 @@ import schedule
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 os.environ.setdefault("STATE_FILE", "/data/state.json")
+os.environ.setdefault("CALIBRATION_FILE", "/data/calibration.json")
 
 import window_watch as ww
 

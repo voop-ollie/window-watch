@@ -42,11 +42,22 @@ LAT = os.getenv("LAT") or "51.527"
 LON = os.getenv("LON") or "-0.021"
 WEATHER_MODEL = os.getenv("WEATHER_MODEL") or "icon_d2"
 CLOSE_ABOVE = float(os.getenv("CLOSE_ABOVE") or "25")    # still used for forecast_close_hour
-THERMAL_ALPHA = float(os.getenv("THERMAL_ALPHA") or "0.18")   # heat bleed-in per hour
-INDOOR_BASE = float(os.getenv("INDOOR_BASE") or "19.0")        # overnight cool-down target
-SOLAR_GAIN = float(os.getenv("SOLAR_GAIN") or "3.0")           # south-facing solar load added during daylight (°C)
+INDOOR_BASE = float(os.getenv("INDOOR_BASE") or "19.0")        # overnight cool-down target (fallback start when no sensor)
 HYSTERESIS = float(os.getenv("HYSTERESIS") or "1.0")           # reopen dead band — only reopen once genuinely cooler
 CLOSE_LEAD = float(os.getenv("CLOSE_LEAD") or "0.5")           # anticipation margin — close this many °C before the crossover while outdoor is still climbing
+
+# Thermal model parameters, per regime. Each hour:
+#   indoor += a * (outdoor - indoor) + b * solar_wm2
+# 'a' is conductance (how fast the room follows outside); 'b' is solar coupling.
+# Open windows = fast follow + strong solar; closed = slow, insulated, blinds cut solar.
+# These are starting defaults — calibrate_from_history() refines them from your flat's
+# own recorded behaviour once enough data accumulates (see load_calibration).
+CAL_DEFAULTS = {
+    "open":   {"a": 0.18, "b": 0.00065, "n": 0},
+    "closed": {"a": 0.06, "b": 0.00030, "n": 0},
+}
+MIN_CAL_SAMPLES = 24   # per regime before a fit is trusted over the defaults
+CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
@@ -81,71 +92,101 @@ def get_outdoor():
 
 
 def get_forecast():
-    """Return list of (hour_int, temp_float) for today in Europe/London time."""
+    """Return list of (hour_int, temp_c, solar_wm2) for today in Europe/London time."""
     url = (
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={LAT}&longitude={LON}"
-        f"&hourly=temperature_2m&temperature_unit=celsius&models={WEATHER_MODEL}"
+        f"&hourly=temperature_2m,shortwave_radiation&temperature_unit=celsius&models={WEATHER_MODEL}"
         f"&forecast_days=1&timezone=Europe%2FLondon"
     )
     with urllib.request.urlopen(url, timeout=20) as r:
         data = json.load(r)
-    times = data["hourly"]["time"]   # e.g. "2026-06-21T14:00"
-    temps = data["hourly"]["temperature_2m"]
-    return [(int(t.split("T")[1][:2]), float(temp)) for t, temp in zip(times, temps)]
+    h = data["hourly"]
+    times = h["time"]   # e.g. "2026-06-21T14:00"
+    temps = h["temperature_2m"]
+    solar = h.get("shortwave_radiation") or [0.0] * len(temps)
+    return [
+        (int(t.split("T")[1][:2]), float(tp), float(sw or 0.0))
+        for t, tp, sw in zip(times, temps, solar)
+    ]
 
 
-def simulate_indoor_day(forecast):
-    """Run the thermal lag model across all 24 forecast hours.
+def load_calibration():
+    """Load fitted thermal params from the volume, falling back to defaults per regime.
 
-    Returns a list of (hour, indoor_est) pairs — the full day simulation.
-    Starting temp is the overnight minimum outdoor (hours 0-5), which is more
-    realistic than a fixed base on warm nights where the room can't cool further.
+    A regime only uses its fitted (a, b) once it has at least MIN_CAL_SAMPLES of
+    real history behind it — until then it rides the hand-picked defaults.
     """
-    overnight = [t for h, t in forecast if h <= 5]
+    cal = {k: dict(v) for k, v in CAL_DEFAULTS.items()}
+    try:
+        with open(CALIBRATION_FILE) as f:
+            fitted = json.load(f)
+        for regime in cal:
+            f_r = fitted.get(regime)
+            if f_r and f_r.get("n", 0) >= MIN_CAL_SAMPLES:
+                cal[regime] = {"a": f_r["a"], "b": f_r["b"], "n": f_r["n"]}
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        pass
+    return cal
+
+
+def thermal_step(indoor, outdoor, solar, closed, cal):
+    """Advance indoor temperature one hour under the given regime."""
+    p = cal["closed" if closed else "open"]
+    return indoor + p["a"] * (outdoor - indoor) + p["b"] * (solar or 0.0)
+
+
+def simulate_indoor_day(forecast, cal):
+    """Full-day indoor sim from the overnight low — fallback when no live sensor.
+
+    Regime-aware: once outdoor passes indoor we assume the windows are shut (the
+    app's own advice), so the insulated 'closed' params take over.
+    """
+    overnight = [t for h, t, _s in forecast if h <= 5]
     start = min(overnight) if overnight else INDOOR_BASE
-    indoor = min(start, INDOOR_BASE)  # never start warmer than the configured base
+    indoor = min(start, INDOOR_BASE)
     result = []
-    for h, outdoor in forecast:
-        effective = outdoor + (SOLAR_GAIN if 7 <= h <= 19 else 0)
-        indoor = THERMAL_ALPHA * effective + (1 - THERMAL_ALPHA) * indoor
+    for h, outdoor, solar in forecast:
+        closed = outdoor >= indoor
+        indoor = thermal_step(indoor, outdoor, solar if 7 <= h <= 19 else 0.0, closed, cal)
         result.append((h, round(indoor, 1)))
     return result
 
 
-def estimate_indoor(forecast):
-    """Return estimated indoor temp at the current local hour."""
+def estimate_indoor(forecast, cal):
+    """Return estimated indoor temp at the current local hour (sensor fallback)."""
     current_hour = datetime.now(timezone.utc).hour + 1  # UTC+1 approximates BST
     indoor = INDOOR_BASE
-    for h, est in simulate_indoor_day(forecast):
+    for h, est in simulate_indoor_day(forecast, cal):
         indoor = est
         if h >= current_hour:
             break
     return indoor
 
 
-def project_indoor(forecast, indoor_now, from_hour):
+def project_indoor(forecast, indoor_now, from_hour, cal):
     """Project indoor temp forward from a *real* reading at from_hour.
 
-    Anchoring to the live sensor (rather than a fictional overnight minimum) is
-    what makes the close/open predictions match reality — a flat that never
-    cools below 25°C overnight shouldn't be told to close at 8am for 24°C air.
+    Anchored to the live sensor, and regime-aware: each hour we assume the windows
+    are shut whenever it's warmer outside than in (i.e. you followed the close
+    advice), so the afternoon tracks the insulated 'closed' model — and the
+    evening reopen prediction reflects a flat that actually held its cool.
     Hours before from_hour are returned as None (no projection backwards).
     """
     indoor = indoor_now
     result = []
-    for h, outdoor in forecast:
+    for h, outdoor, solar in forecast:
         if h < from_hour:
             result.append((h, None))
             continue
         if h > from_hour:
-            effective = outdoor + (SOLAR_GAIN if 7 <= h <= 19 else 0)
-            indoor = THERMAL_ALPHA * effective + (1 - THERMAL_ALPHA) * indoor
+            closed = outdoor >= indoor
+            indoor = thermal_step(indoor, outdoor, solar if 7 <= h <= 19 else 0.0, closed, cal)
         result.append((h, round(indoor, 1)))
     return result
 
 
-def forecast_windows(forecast, indoor_now=None):
+def forecast_windows(forecast, cal, indoor_now=None):
     """Return (close_hour, open_hour, max_temp, peak_hour) for today.
 
     The close moment is the *crossover* — when outdoor first rises to meet indoor
@@ -154,26 +195,98 @@ def forecast_windows(forecast, indoor_now=None):
     we don't reopen on a brief dip). When a live indoor reading is supplied the
     indoor curve is projected forward from it; otherwise the model-only sim is used.
     """
-    max_temp = max(t for _, t in forecast)
-    peak_hour = next(h for h, t in forecast if t == max_temp)
+    max_temp = max(t for _, t, _s in forecast)
+    peak_hour = next(h for h, t, _s in forecast if t == max_temp)
     if indoor_now is not None:
         current_hour = datetime.now(timezone.utc).hour + 1  # UTC+1 approximates BST
-        curve = project_indoor(forecast, indoor_now, current_hour)
+        curve = project_indoor(forecast, indoor_now, current_hour, cal)
         start = current_hour
     else:
-        curve = simulate_indoor_day(forecast)
+        curve = simulate_indoor_day(forecast, cal)
         start = 6
     close_hour = next(
-        (h for (h, t_out), (_, t_in) in zip(forecast, curve)
+        (h for (h, t_out, _s), (_, t_in) in zip(forecast, curve)
          if t_in is not None and h >= start and t_out >= t_in),
         None,
     )
     open_hour = next(
-        (h for (h, t_out), (_, t_in) in zip(forecast, curve)
+        (h for (h, t_out, _s), (_, t_in) in zip(forecast, curve)
          if t_in is not None and h > (peak_hour or 0) and t_out <= t_in - HYSTERESIS),
         None,
     )
     return close_hour, open_hour, max_temp, peak_hour
+
+
+def calibrate_from_history():
+    """Fit per-regime thermal params (a, b) from the recorded history CSV.
+
+    For each pair of consecutive same-regime samples (regime taken from the status
+    recommended at the time — i.e. assuming you followed the advice), least-squares
+    fit the hourly step:  Δindoor = a·(outdoor − indoor)·Δt + b·solar·Δt
+    The result is written to CALIBRATION_FILE; regimes with < MIN_CAL_SAMPLES of
+    data are skipped and keep their defaults (see load_calibration). Over time, as
+    closed-window days accumulate, the closed model learns how well the flat holds.
+    """
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        return
+    base = f"https://api.github.com/gists/{DASHBOARD_GIST_ID}"
+    req = urllib.request.Request(base)
+    req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            gist = json.load(r)
+        csv = gist["files"].get("window-watch-history.csv", {}).get("content", "")
+    except Exception as e:
+        print(f"[warn] Calibration fetch failed: {e}", file=sys.stderr)
+        return
+
+    rows = []
+    for line in csv.strip().splitlines()[1:]:
+        parts = line.split(",")
+        if len(parts) < 13:
+            continue
+        try:
+            ts = datetime.strptime(parts[0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            outdoor, solar = float(parts[1]), float(parts[6] or 0)
+            indoor, status = float(parts[9]), parts[12]
+        except (ValueError, IndexError):
+            continue
+        rows.append((ts, outdoor, solar, indoor, status))
+
+    acc = {r: dict(S11=0.0, S12=0.0, S22=0.0, Sy1=0.0, Sy2=0.0, n=0)
+           for r in ("open", "closed")}
+    for (t0, o0, s0, i0, st0), (t1, _o1, _s1, i1, _st1) in zip(rows, rows[1:]):
+        dt = (t1 - t0).total_seconds() / 3600.0
+        if dt <= 0 or dt > 1.5:          # skip overnight gaps and duplicate runs
+            continue
+        regime = "closed" if st0 == "close" else "open"
+        x1, x2, y = (o0 - i0) * dt, s0 * dt, i1 - i0
+        a = acc[regime]
+        a["S11"] += x1 * x1; a["S12"] += x1 * x2; a["S22"] += x2 * x2
+        a["Sy1"] += x1 * y;  a["Sy2"] += x2 * y;  a["n"] += 1
+
+    fitted = {}
+    for regime, a in acc.items():
+        det = a["S11"] * a["S22"] - a["S12"] * a["S12"]
+        if a["n"] < MIN_CAL_SAMPLES or abs(det) < 1e-9:
+            continue
+        coef_a = (a["Sy1"] * a["S22"] - a["Sy2"] * a["S12"]) / det
+        coef_b = (a["S11"] * a["Sy2"] - a["S12"] * a["Sy1"]) / det
+        coef_a = max(0.01, min(0.6, coef_a))     # clamp to physically sane ranges
+        coef_b = max(0.0, min(0.005, coef_b))
+        fitted[regime] = {"a": round(coef_a, 5), "b": round(coef_b, 7), "n": a["n"]}
+
+    if not fitted:
+        print("Calibration: not enough data yet — keeping defaults.")
+        return
+    try:
+        with open(CALIBRATION_FILE, "w") as f:
+            json.dump(fitted, f, indent=2)
+        print(f"Calibration updated: {fitted}")
+    except Exception as e:
+        print(f"[warn] Calibration save failed: {e}", file=sys.stderr)
 
 
 def get_indoor_shelly():
@@ -357,14 +470,14 @@ def fmt_hour_approx(h):
     return f"{r - 12}pm"
 
 
-def daily_summary(outdoor, indoor_now=None):
+def daily_summary(outdoor, cal, indoor_now=None):
     try:
         forecast = get_forecast()
     except Exception as e:
         print(f"[warn] Forecast fetch failed: {e}", file=sys.stderr)
         return
 
-    close_hour, open_hour, max_temp, max_hour = forecast_windows(forecast, indoor_now)
+    close_hour, open_hour, max_temp, max_hour = forecast_windows(forecast, cal, indoor_now)
 
     print(f"daily summary: max={max_temp:.1f}°C at {fmt_hour(max_hour)}  close={close_hour}  open={open_hour}  indoor_now={indoor_now}")
 
@@ -404,6 +517,11 @@ def main():
     indoor_humidity = shelly["humidity"] if shelly else None
     indoor_battery  = shelly["battery"]  if shelly else None
 
+    is_brief = os.getenv("DAILY_SUMMARY") == "true"
+    if is_brief:
+        calibrate_from_history()   # refit the thermal model from yesterday's data (once daily)
+    cal = load_calibration()
+
     # Fetch today's forecast; derive indoor estimate and all forward-looking stats
     forecast_max = forecast_peak_hour = forecast_close_hour = forecast_open_hour = None
     forecast_hourly = None
@@ -411,23 +529,23 @@ def main():
     indoor_est = INDOOR_BASE
     try:
         forecast = get_forecast()
-        indoor_sim = simulate_indoor_day(forecast)
-        indoor_est = (shelly["temp"] if shelly else None) or estimate_indoor(forecast)
-        forecast_hourly = [[h, t_out, t_in] for (h, t_out), (_, t_in) in zip(forecast, indoor_sim)]
+        indoor_sim = simulate_indoor_day(forecast, cal)
+        indoor_est = (shelly["temp"] if shelly else None) or estimate_indoor(forecast, cal)
+        forecast_hourly = [[h, t_out, t_in] for (h, t_out, _s), (_, t_in) in zip(forecast, indoor_sim)]
         # Predictions anchored to the live reading when we have one, else model-only
         forecast_close_hour, forecast_open_hour, forecast_max, forecast_peak_hour = forecast_windows(
-            forecast, shelly["temp"] if shelly else None
+            forecast, cal, shelly["temp"] if shelly else None
         )
         # Is outdoor still climbing? (drives anticipatory close)
         current_hour = datetime.now(timezone.utc).hour + 1
-        temp_now = next((t for h, t in forecast if h == current_hour), outdoor)
-        temp_next = next((t for h, t in forecast if h == current_hour + 1), temp_now)
+        temp_now = next((t for h, t, _s in forecast if h == current_hour), outdoor)
+        temp_next = next((t for h, t, _s in forecast if h == current_hour + 1), temp_now)
         rising = temp_next >= temp_now
     except Exception as e:
         print(f"[warn] Forecast fetch failed: {e}", file=sys.stderr)
 
-    if os.getenv("DAILY_SUMMARY") == "true":
-        daily_summary(outdoor, shelly["temp"] if shelly else None)
+    if is_brief:
+        daily_summary(outdoor, cal, shelly["temp"] if shelly else None)
         update_dashboard(outdoor, load_state() or "open", indoor_est, forecast_max, forecast_peak_hour, forecast_close_hour, forecast_open_hour, forecast_hourly)
         return
 
