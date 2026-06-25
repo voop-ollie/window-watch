@@ -383,7 +383,7 @@ def notify(title, body, tags, priority="default"):
         r.read()
 
 
-def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, forecast_peak_hour=None, forecast_close_hour=None, forecast_open_hour=None, forecast_hourly=None):
+def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, forecast_peak_hour=None, forecast_close_hour=None, forecast_open_hour=None, forecast_hourly=None, indoor_humidity_pct=None):
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         return
@@ -394,6 +394,7 @@ def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, fore
                     "status": status,
                     "outdoor_c": outdoor,
                     "indoor_est_c": indoor_est_c,
+                    "indoor_humidity_pct": indoor_humidity_pct,
                     "forecast_max_c": forecast_max,
                     "forecast_peak_hour": forecast_peak_hour,
                     "forecast_close_hour": forecast_close_hour,
@@ -609,7 +610,7 @@ def main():
 
     if is_brief:
         daily_summary(outdoor, cal, shelly["temp"] if shelly else None)
-        update_dashboard(outdoor, last or "open", indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly)
+        update_dashboard(outdoor, last or "open", indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity)
         save_state(state)
         return
 
@@ -656,7 +657,7 @@ def main():
 
     state["status"] = status
     save_state(state)
-    update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly)
+    update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity)
     log_history(outdoor_data, indoor_est, indoor_humidity, indoor_battery, status)
 
 

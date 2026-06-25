@@ -44,15 +44,6 @@ function fmtHour(h) {
   return `${h - 12}pm`
 }
 
-function fmtHour(h) {
-  if (h == null) return "?"
-  const r = Math.round(h / 2) * 2
-  if (r === 0 || r === 24) return "midnight"
-  if (r < 12)  return `${r}am`
-  if (r === 12) return "noon"
-  return `${r - 12}pm`
-}
-
 function timeAgo(utcString) {
   if (!utcString) return "never"
   const diff = Math.floor((Date.now() - new Date(utcString).getTime()) / 60000)

@@ -143,6 +143,37 @@
       position: relative;
     }
 
+    .wetbulb { width: 100%; margin-bottom: 32px; }
+    .wetbulb-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 8px;
+    }
+    .wetbulb-title { font-size: 12px; opacity: 0.5; letter-spacing: 0.02em; }
+    .wetbulb-value { font-size: 14px; font-weight: 600; }
+    .wetbulb-value span { opacity: 0.5; font-weight: 400; }
+    .wetbulb-scale {
+      position: relative; height: 8px; border-radius: 4px; overflow: hidden;
+      background: linear-gradient(to right,
+        #3a7bd5 0%,        /* safe   (≤22) */
+        #5cae8e 22%,       /* warm   */
+        #d9b54a 45%,       /* muggy  (~26) */
+        #e08a3c 58%,       /* uncomfortable (~28) */
+        #d04a3c 72%,       /* danger (~31) */
+        #7a1f1f 100%);     /* extreme (35) */
+    }
+    .wetbulb-marker {
+      position: absolute; top: -3px; bottom: -3px; width: 3px;
+      transform: translateX(-50%); background: #fff; border-radius: 2px;
+      box-shadow: 0 0 0 1.5px rgba(0,0,0,0.45);
+      transition: left 0.5s ease;
+    }
+    .wetbulb-ticks {
+      position: relative; height: 14px; margin-top: 4px; font-size: 10px; opacity: 0.35;
+    }
+    .wetbulb-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+    .wetbulb-readout { margin-top: 8px; font-size: 13px; opacity: 0.7; text-align: center; }
+    .wetbulb-readout.alert { opacity: 1; color: #ffd0d0; font-weight: 600; }
+
     .dot {
       display: inline-block;
       width: 7px; height: 7px;
@@ -184,6 +215,23 @@
         <span id="balance-outdoor-label"></span>
       </div>
     </div>
+    <div class="wetbulb" id="wetbulb" style="display:none">
+      <div class="wetbulb-head">
+        <span class="wetbulb-title">wet-bulb · survivability of the air</span>
+        <span class="wetbulb-value" id="wetbulb-value">—</span>
+      </div>
+      <div class="wetbulb-scale">
+        <div class="wetbulb-marker" id="wetbulb-marker"></div>
+      </div>
+      <div class="wetbulb-ticks">
+        <span style="left:0%">18°</span>
+        <span style="left:47%">26°</span>
+        <span style="left:59%">28°</span>
+        <span style="left:76%">31°</span>
+        <span style="left:100%">35°</span>
+      </div>
+      <div class="wetbulb-readout" id="wetbulb-readout"></div>
+    </div>
     <div class="forecast" id="forecast" style="display:none"></div>
     <div class="updated"><span class="dot"></span><span id="updated">checking…</span><span id="checked"></span></div>
     <button class="refresh-btn" id="refresh-btn" onclick="manualRefresh()">Refresh</button>
@@ -203,19 +251,11 @@
     }
 
     function fmtHour(h) {
+      if (h == null) return "?"
       if (h === 0)  return "midnight"
       if (h < 12)  return `${h}am`
       if (h === 12) return "noon"
       return `${h - 12}pm`
-    }
-
-    function fmtHour(h) {
-      if (h == null) return "?"
-      const r = Math.round(h / 2) * 2
-      if (r === 0 || r === 24) return "midnight"
-      if (r < 12)  return `${r}am`
-      if (r === 12) return "noon"
-      return `${r - 12}pm`
     }
 
     function timeAgo(utcString) {
@@ -395,18 +435,7 @@
                 padding: 12
               }
             },
-            tooltip: {
-              backgroundColor: 'rgba(0,0,0,0.75)',
-              titleColor: 'rgba(255,255,255,0.6)',
-              bodyColor: 'rgba(255,255,255,0.85)',
-              callbacks: {
-                title: ([item]) => {
-                  const dt = new Date(item.parsed.x)
-                  return dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-                },
-                label: item => `${item.dataset.label}: ${item.parsed.y?.toFixed(1)}°C`
-              }
-            }
+            tooltip: { enabled: false }
           }
         }
       })
@@ -414,6 +443,25 @@
 
     const HYSTERESIS = 1.0  // reopen band — must match Python default
     const CLOSE_LEAD = 0.5  // anticipatory close margin — must match Python default
+
+    // Wet-bulb thresholds (°C). 28° is where prolonged indoor exposure turns
+    // dangerous; 35° is the theoretical survivability limit.
+    const WB_DANGER = 28
+    const WB_MIN = 18, WB_MAX = 35   // gauge scale bounds
+
+    // Stull (2011) approximation — accurate to ~±0.65°C for typical indoor RH.
+    function wetBulb(T, RH) {
+      if (T == null || RH == null) return null
+      RH = Math.max(1, Math.min(100, RH))
+      return T * Math.atan(0.151977 * Math.sqrt(RH + 8.313659))
+        + Math.atan(T + RH) - Math.atan(RH - 1.676331)
+        + 0.00391838 * Math.pow(RH, 1.5) * Math.atan(0.023101 * RH)
+        - 4.686035
+    }
+
+    function wbPct(wb) {
+      return Math.max(0, Math.min(100, (wb - WB_MIN) / (WB_MAX - WB_MIN) * 100))
+    }
 
     function liveTemps(d) {
       // Outdoor ticks between refreshes by following the forecast *trend*, but it's
@@ -485,6 +533,27 @@
           "holding — barely cooler out"
       } else {
         balance.style.display = "none"
+      }
+
+      // Wet-bulb gauge — needs real indoor temp + humidity from the Shelly.
+      const wb = wetBulb(d.indoor_est_c, d.indoor_humidity_pct)
+      const wbBox = document.getElementById("wetbulb")
+      if (wb != null) {
+        wbBox.style.display = ""
+        document.getElementById("wetbulb-value").innerHTML =
+          `${wb.toFixed(1)}°C <span>wet-bulb</span>`
+        document.getElementById("wetbulb-marker").style.left = wbPct(wb) + "%"
+        const readout = document.getElementById("wetbulb-readout")
+        const gap = WB_DANGER - wb
+        if (gap > 0) {
+          readout.className = "wetbulb-readout"
+          readout.textContent = `${gap.toFixed(1)}°C of headroom before the ${WB_DANGER}° danger line`
+        } else {
+          readout.className = "wetbulb-readout alert"
+          readout.textContent = `⚠ Past the ${WB_DANGER}° danger line by ${(-gap).toFixed(1)}°C — ventilate, hydrate, avoid exertion`
+        }
+      } else {
+        wbBox.style.display = "none"
       }
 
       // Forecast block. The close time is frozen once it's passed (server-side),
