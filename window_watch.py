@@ -32,6 +32,7 @@ Config via environment variables:
 """
 
 import json
+import math
 import os
 import sys
 import urllib.parse
@@ -179,6 +180,26 @@ def estimate_indoor(forecast, cal):
         if h >= current_hour:
             break
     return indoor
+
+
+def saturation_vp(t_c):
+    """Saturation vapour pressure (hPa) — Magnus formula."""
+    return 6.112 * math.exp(17.62 * t_c / (243.12 + t_c))
+
+
+def estimate_indoor_humidity(indoor_temp, outdoor_temp, outdoor_rh):
+    """Fallback indoor RH for when the Shelly is offline.
+
+    There's no humidity model, so we lean on physics: a flat's water-vapour
+    content broadly tracks outdoors through air exchange, while RH is just that
+    vapour pressure expressed against the (warmer) indoor temperature. So we take
+    the outdoor vapour pressure and re-evaluate it at the estimated indoor temp.
+    Indoor moisture sources (cooking, people, drying laundry) aren't captured, so
+    this is approximate — good enough to keep the wet-bulb gauge alive, no more.
+    """
+    e_out = (outdoor_rh / 100.0) * saturation_vp(outdoor_temp)
+    rh_in = e_out / saturation_vp(indoor_temp) * 100.0
+    return max(1.0, min(99.0, rh_in))
 
 
 def project_indoor(forecast, indoor_now, from_hour, cal):
@@ -383,7 +404,7 @@ def notify(title, body, tags, priority="default"):
         r.read()
 
 
-def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, forecast_peak_hour=None, forecast_close_hour=None, forecast_open_hour=None, forecast_hourly=None, indoor_humidity_pct=None):
+def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, forecast_peak_hour=None, forecast_close_hour=None, forecast_open_hour=None, forecast_hourly=None, indoor_humidity_pct=None, indoor_estimated=False):
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         return
@@ -395,6 +416,7 @@ def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, fore
                     "outdoor_c": outdoor,
                     "indoor_est_c": indoor_est_c,
                     "indoor_humidity_pct": indoor_humidity_pct,
+                    "indoor_estimated": indoor_estimated,
                     "forecast_max_c": forecast_max,
                     "forecast_peak_hour": forecast_peak_hour,
                     "forecast_close_hour": forecast_close_hour,
@@ -573,6 +595,16 @@ def main():
     except Exception as e:
         print(f"[warn] Forecast fetch failed: {e}", file=sys.stderr)
 
+    # Sensor fallback for humidity: when the Shelly is offline indoor_est is
+    # already a modelled temperature — pair it with a modelled RH so the
+    # wet-bulb gauge keeps working (flagged as an estimate downstream). The
+    # history CSV still records the real reading only (None here), so the
+    # estimate goes to the dashboard alone, never into calibration.
+    indoor_estimated = shelly is None
+    indoor_humidity_display = indoor_humidity
+    if indoor_estimated:
+        indoor_humidity_display = estimate_indoor_humidity(indoor_est, outdoor, outdoor_data["humidity"])
+
     # ---- State, decision, and frozen close/open times ----------------------
     # forecast_close_hour / forecast_open_hour above are the *fresh* predictions.
     # We only let them move the displayed times while the event is still ahead —
@@ -610,7 +642,7 @@ def main():
 
     if is_brief:
         daily_summary(outdoor, cal, shelly["temp"] if shelly else None)
-        update_dashboard(outdoor, last or "open", indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity)
+        update_dashboard(outdoor, last or "open", indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity_display, indoor_estimated)
         save_state(state)
         return
 
@@ -657,7 +689,7 @@ def main():
 
     state["status"] = status
     save_state(state)
-    update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity)
+    update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity_display, indoor_estimated)
     log_history(outdoor_data, indoor_est, indoor_humidity, indoor_battery, status)
 
 

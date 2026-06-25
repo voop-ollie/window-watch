@@ -539,18 +539,20 @@
       const wb = wetBulb(d.indoor_est_c, d.indoor_humidity_pct)
       const wbBox = document.getElementById("wetbulb")
       if (wb != null) {
+        const est = !!d.indoor_estimated   // sensor offline → modelled temp + RH
         wbBox.style.display = ""
         document.getElementById("wetbulb-value").innerHTML =
-          `${wb.toFixed(1)}°C <span>wet-bulb</span>`
+          `${est ? "~" : ""}${wb.toFixed(1)}°C <span>wet-bulb</span>`
         document.getElementById("wetbulb-marker").style.left = wbPct(wb) + "%"
         const readout = document.getElementById("wetbulb-readout")
+        const note = est ? " · estimated, sensor offline" : ""
         const gap = WB_DANGER - wb
         if (gap > 0) {
           readout.className = "wetbulb-readout"
-          readout.textContent = `${gap.toFixed(1)}°C of headroom before the ${WB_DANGER}° danger line`
+          readout.textContent = `${gap.toFixed(1)}°C of headroom before the ${WB_DANGER}° danger line${note}`
         } else {
           readout.className = "wetbulb-readout alert"
-          readout.textContent = `⚠ Past the ${WB_DANGER}° danger line by ${(-gap).toFixed(1)}°C — ventilate, hydrate, avoid exertion`
+          readout.textContent = `⚠ Past the ${WB_DANGER}° danger line by ${(-gap).toFixed(1)}°C — ventilate, hydrate, avoid exertion${note}`
         }
       } else {
         wbBox.style.display = "none"
