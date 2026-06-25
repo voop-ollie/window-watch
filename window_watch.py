@@ -110,11 +110,11 @@ def get_outdoor():
 
 
 def get_forecast():
-    """Return list of (hour_int, temp_c, solar_wm2) for today in Europe/London time."""
+    """Return list of (hour_int, temp_c, solar_wm2, rh_pct) for today (Europe/London)."""
     url = (
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={LAT}&longitude={LON}"
-        f"&hourly=temperature_2m,shortwave_radiation&temperature_unit=celsius&models={WEATHER_MODEL}"
+        f"&hourly=temperature_2m,shortwave_radiation,relative_humidity_2m&temperature_unit=celsius&models={WEATHER_MODEL}"
         f"&forecast_days=1&timezone=Europe%2FLondon"
     )
     with urllib.request.urlopen(url, timeout=20) as r:
@@ -123,9 +123,10 @@ def get_forecast():
     times = h["time"]   # e.g. "2026-06-21T14:00"
     temps = h["temperature_2m"]
     solar = h.get("shortwave_radiation") or [0.0] * len(temps)
+    rh = h.get("relative_humidity_2m") or [50.0] * len(temps)
     return [
-        (int(t.split("T")[1][:2]), float(tp), float(sw or 0.0))
-        for t, tp, sw in zip(times, temps, solar)
+        (int(t.split("T")[1][:2]), float(tp), float(sw or 0.0), float(rhv if rhv is not None else 50.0))
+        for t, tp, sw, rhv in zip(times, temps, solar, rh)
     ]
 
 
@@ -160,11 +161,11 @@ def simulate_indoor_day(forecast, cal):
     Regime-aware: once outdoor passes indoor we assume the windows are shut (the
     app's own advice), so the insulated 'closed' params take over.
     """
-    overnight = [t for h, t, _s in forecast if h <= 5]
+    overnight = [t for h, t, _s, _rh in forecast if h <= 5]
     start = min(overnight) if overnight else INDOOR_BASE
     indoor = min(start, INDOOR_BASE)
     result = []
-    for h, outdoor, solar in forecast:
+    for h, outdoor, solar, _rh in forecast:
         closed = outdoor >= indoor
         indoor = thermal_step(indoor, outdoor, solar if 7 <= h <= 19 else 0.0, closed, cal)
         result.append((h, round(indoor, 1)))
@@ -213,7 +214,7 @@ def project_indoor(forecast, indoor_now, from_hour, cal):
     """
     indoor = indoor_now
     result = []
-    for h, outdoor, solar in forecast:
+    for h, outdoor, solar, _rh in forecast:
         if h < from_hour:
             result.append((h, None))
             continue
@@ -233,8 +234,8 @@ def forecast_windows(forecast, cal, indoor_now=None):
     we don't reopen on a brief dip). When a live indoor reading is supplied the
     indoor curve is projected forward from it; otherwise the model-only sim is used.
     """
-    max_temp = max(t for _, t, _s in forecast)
-    peak_hour = next(h for h, t, _s in forecast if t == max_temp)
+    max_temp = max(t for _, t, _s, _rh in forecast)
+    peak_hour = next(h for h, t, _s, _rh in forecast if t == max_temp)
     if indoor_now is not None:
         current_hour = datetime.now(timezone.utc).hour + 1  # UTC+1 approximates BST
         curve = project_indoor(forecast, indoor_now, current_hour, cal)
@@ -243,16 +244,53 @@ def forecast_windows(forecast, cal, indoor_now=None):
         curve = simulate_indoor_day(forecast, cal)
         start = 6
     close_hour = next(
-        (h for (h, t_out, _s), (_, t_in) in zip(forecast, curve)
+        (h for (h, t_out, _s, _rh), (_, t_in) in zip(forecast, curve)
          if t_in is not None and h >= start and t_out >= t_in),
         None,
     )
     open_hour = next(
-        (h for (h, t_out, _s), (_, t_in) in zip(forecast, curve)
+        (h for (h, t_out, _s, _rh), (_, t_in) in zip(forecast, curve)
          if t_in is not None and h > (peak_hour or 0) and t_out <= t_in - HYSTERESIS),
         None,
     )
     return close_hour, open_hour, max_temp, peak_hour
+
+
+def wet_bulb(t_c, rh):
+    """Wet-bulb temperature (°C) — Stull (2011) approximation. Mirrors the JS."""
+    rh = max(1.0, min(100.0, rh))
+    return (t_c * math.atan(0.151977 * math.sqrt(rh + 8.313659))
+            + math.atan(t_c + rh) - math.atan(rh - 1.676331)
+            + 0.00391838 * rh ** 1.5 * math.atan(0.023101 * rh)
+            - 4.686035)
+
+
+def forecast_wetbulb_max(forecast, cal, indoor_now=None):
+    """Project today's peak indoor wet-bulb (°C) and the hour it occurs.
+
+    Pairs the indoor-temperature projection (the prediction engine, anchored to
+    the live sensor when we have one) with an indoor-humidity estimate — outdoor
+    vapour pressure re-expressed at the projected indoor temp — and takes the
+    hourly maximum. Indoor moisture sources aren't modelled, so it's approximate,
+    but it answers "how balmy will it get inside today". When anchored, only hours
+    from now forward are considered (the peak is still ahead in the morning brief).
+    """
+    if indoor_now is not None:
+        current_hour = datetime.now(timezone.utc).hour + 1  # UTC+1 approximates BST
+        curve = project_indoor(forecast, indoor_now, current_hour, cal)
+    else:
+        curve = simulate_indoor_day(forecast, cal)
+    best_wb, best_h = None, None
+    for (h, t_out, _s, rh_out), (_, t_in) in zip(forecast, curve):
+        if t_in is None:
+            continue
+        rh_in = estimate_indoor_humidity(t_in, t_out, rh_out)
+        wb = wet_bulb(t_in, rh_in)
+        if best_wb is None or wb > best_wb:
+            best_wb, best_h = wb, h
+    if best_wb is None:
+        return None, None
+    return round(best_wb, 1), best_h
 
 
 def calibrate_from_history():
@@ -404,7 +442,7 @@ def notify(title, body, tags, priority="default"):
         r.read()
 
 
-def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, forecast_peak_hour=None, forecast_close_hour=None, forecast_open_hour=None, forecast_hourly=None, indoor_humidity_pct=None, indoor_estimated=False):
+def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, forecast_peak_hour=None, forecast_close_hour=None, forecast_open_hour=None, forecast_hourly=None, indoor_humidity_pct=None, indoor_estimated=False, wetbulb_max_c=None, wetbulb_peak_hour=None):
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         return
@@ -422,6 +460,8 @@ def update_dashboard(outdoor, status, indoor_est_c=None, forecast_max=None, fore
                     "forecast_close_hour": forecast_close_hour,
                     "forecast_open_hour": forecast_open_hour,
                     "forecast_hourly": forecast_hourly,
+                    "wetbulb_max_c": wetbulb_max_c,
+                    "wetbulb_peak_hour": wetbulb_peak_hour,
                     "updated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 }, indent=2)
             }
@@ -521,6 +561,15 @@ def fmt_hour_approx(h):
     return f"{r - 12}pm"
 
 
+def comfort_word(wb):
+    """Plain-English air-comfort band for a wet-bulb °C — mirrors the dashboard."""
+    if wb < 22: return "comfortable"
+    if wb < 26: return "muggy"
+    if wb < 28: return "oppressive"
+    if wb < 31: return "dangerous"
+    return "extreme"
+
+
 def daily_summary(outdoor, cal, indoor_now=None):
     try:
         forecast = get_forecast()
@@ -529,8 +578,12 @@ def daily_summary(outdoor, cal, indoor_now=None):
         return
 
     close_hour, open_hour, max_temp, max_hour = forecast_windows(forecast, cal, indoor_now)
+    wb_max, wb_hour = forecast_wetbulb_max(forecast, cal, indoor_now)
 
-    print(f"daily summary: max={max_temp:.1f}°C at {fmt_hour(max_hour)}  close={close_hour}  open={open_hour}  indoor_now={indoor_now}")
+    print(f"daily summary: max={max_temp:.1f}°C at {fmt_hour(max_hour)}  close={close_hour}  open={open_hour}  wetbulb_max={wb_max}  indoor_now={indoor_now}")
+
+    balmy = (f" Air feels {comfort_word(wb_max)} at its muggiest, around {fmt_hour(wb_hour)}."
+             if wb_max is not None else "")
 
     if close_hour is not None:
         title = f"Close before {fmt_hour(close_hour)}"
@@ -540,6 +593,7 @@ def daily_summary(outdoor, cal, indoor_now=None):
             f"Peak {max_temp:.0f}°C around {fmt_hour(max_hour)}. "
             f"Shut windows before {fmt_hour(close_hour)}"
             + (f" and open up again around {fmt_hour(open_hour)}." if open_hour else " — may stay hot into the evening.")
+            + balmy
         )
         notify(title, body, tags="house,sunny", priority="high")
     elif max_temp >= INDOOR_BASE + 3:
@@ -576,21 +630,26 @@ def main():
     # Fetch today's forecast; derive indoor estimate and all forward-looking stats
     forecast_max = forecast_peak_hour = forecast_close_hour = forecast_open_hour = None
     forecast_hourly = None
+    wetbulb_max = wetbulb_peak_hour = None
     rising = False
     indoor_est = INDOOR_BASE
     try:
         forecast = get_forecast()
         indoor_sim = simulate_indoor_day(forecast, cal)
         indoor_est = (shelly["temp"] if shelly else None) or estimate_indoor(forecast, cal)
-        forecast_hourly = [[h, t_out, t_in] for (h, t_out, _s), (_, t_in) in zip(forecast, indoor_sim)]
+        forecast_hourly = [[h, t_out, t_in] for (h, t_out, _s, _rh), (_, t_in) in zip(forecast, indoor_sim)]
         # Predictions anchored to the live reading when we have one, else model-only
         forecast_close_hour, forecast_open_hour, forecast_max, forecast_peak_hour = forecast_windows(
             forecast, cal, shelly["temp"] if shelly else None
         )
+        # Today's projected peak indoor wet-bulb — "how balmy will it get inside"
+        wetbulb_max, wetbulb_peak_hour = forecast_wetbulb_max(
+            forecast, cal, shelly["temp"] if shelly else None
+        )
         # Is outdoor still climbing? (drives anticipatory close)
         current_hour = datetime.now(timezone.utc).hour + 1
-        temp_now = next((t for h, t, _s in forecast if h == current_hour), outdoor)
-        temp_next = next((t for h, t, _s in forecast if h == current_hour + 1), temp_now)
+        temp_now = next((t for h, t, _s, _rh in forecast if h == current_hour), outdoor)
+        temp_next = next((t for h, t, _s, _rh in forecast if h == current_hour + 1), temp_now)
         rising = temp_next >= temp_now
     except Exception as e:
         print(f"[warn] Forecast fetch failed: {e}", file=sys.stderr)
@@ -642,7 +701,7 @@ def main():
 
     if is_brief:
         daily_summary(outdoor, cal, shelly["temp"] if shelly else None)
-        update_dashboard(outdoor, last or "open", indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity_display, indoor_estimated)
+        update_dashboard(outdoor, last or "open", indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity_display, indoor_estimated, wetbulb_max, wetbulb_peak_hour)
         save_state(state)
         return
 
@@ -689,7 +748,7 @@ def main():
 
     state["status"] = status
     save_state(state)
-    update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity_display, indoor_estimated)
+    update_dashboard(outdoor, status, indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity_display, indoor_estimated, wetbulb_max, wetbulb_peak_hour)
     log_history(outdoor_data, indoor_est, indoor_humidity, indoor_battery, status)
 
 

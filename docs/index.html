@@ -182,6 +182,12 @@
     .wetbulb-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
     .wetbulb-readout { margin-top: 8px; font-size: 13px; opacity: 0.7; text-align: center; }
     .wetbulb-readout.alert { opacity: 1; color: #ffd0d0; font-weight: 600; }
+    .wetbulb-forecast {
+      margin-top: 10px; padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 12px; opacity: 0.6; text-align: center;
+    }
+    .wetbulb-forecast strong { opacity: 1; font-weight: 600; }
     .wetbulb-foot { margin-top: 4px; font-size: 10px; opacity: 0.28; text-align: center; }
 
     .dot {
@@ -246,6 +252,7 @@
         <span style="left:68%">danger</span>
       </div>
       <div class="wetbulb-readout" id="wetbulb-readout"></div>
+      <div class="wetbulb-forecast" id="wetbulb-forecast"></div>
       <div class="wetbulb-foot" id="wetbulb-foot"></div>
     </div>
   </div>
@@ -598,6 +605,17 @@
         } else {
           readout.className = "wetbulb-readout alert"
           readout.textContent = "⚠ Heat-stress danger — ventilate, hydrate, avoid exertion"
+        }
+
+        // Today's projected peak — "how balmy will it get" from the engine.
+        const fcEl = document.getElementById("wetbulb-forecast")
+        if (d.wetbulb_max_c != null && d.wetbulb_peak_hour != null) {
+          const mPct = comfortPct(d.wetbulb_max_c)
+          const [mWord] = comfortBand(d.wetbulb_max_c)
+          fcEl.style.display = ""
+          fcEl.innerHTML = `Today's muggiest: <strong>${mPct}% · ${mWord}</strong> around ${fmtHour(d.wetbulb_peak_hour)}`
+        } else {
+          fcEl.style.display = "none"
         }
 
         // Keep the raw wet-bulb available, but demoted to a small technical footnote
