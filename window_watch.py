@@ -47,34 +47,40 @@ INDOOR_BASE = float(os.getenv("INDOOR_BASE") or "19.0")        # overnight cool-
 HYSTERESIS = float(os.getenv("HYSTERESIS") or "1.0")           # reopen dead band — only reopen once genuinely cooler
 CLOSE_LEAD = float(os.getenv("CLOSE_LEAD") or "0.5")           # anticipation margin — close this many °C before the crossover while outdoor is still climbing
 
-# Thermal model parameters, per regime. Each hour:
-#   indoor += a * (outdoor - indoor) + b * solar_wm2
-# 'a' is conductance (how fast the room follows outside); 'b' is solar coupling.
-# Open windows = fast follow + strong solar; closed = the building envelope insulates
-# and blinds cut solar — how *well* it insulates depends on the building.
+# Thermal/humidity model parameters, per regime. Each hour:
+#   indoor   += a * (outdoor - indoor) + b * solar_wm2          (temperature)
+#   e_indoor += c * (e_outdoor - e_indoor)                      (moisture / vapour pressure)
+# 'a' is conductance (how fast the room follows outside temp); 'b' is solar coupling;
+# 'c' is how fast indoor moisture relaxes toward outdoor moisture (air exchange).
+# Open windows = fast follow + strong solar + fast moisture exchange; closed = the
+# building envelope insulates, blinds cut solar, and a tighter shell holds its own air.
 #
 # BUILDING_PROFILE picks the starting point: "add your building, learn going forward".
-# These presets are only seeds — calibrate_from_history() overrides each regime with a
-# fit to your flat's own recorded behaviour once enough data accumulates. The key
-# difference is the *closed* regime: an insulated flat barely warms once shut; an
-# uninsulated one (solid wall, single glazing) keeps leaking heat in even closed.
+# These presets are only seeds — calibrate_from_history() blends in a fit to your flat's
+# own recorded behaviour, weighted by how much data backs it. The key difference is the
+# *closed* regime: an insulated flat barely warms and holds its air once shut; an
+# uninsulated one (solid wall, single glazing) keeps leaking heat and air in even closed.
 # A future app would surface this as a one-time onboarding choice.
 BUILDING_PROFILES = {
-    "uninsulated": {   # older solid-wall / single glazing — heat still seeps in when shut
+    "uninsulated": {   # older solid-wall / single glazing — heat & air still seep in when shut
         "label":  "Older / uninsulated (solid wall, single glazing)",
-        "open":   {"a": 0.20, "b": 0.00080, "n": 0},
-        "closed": {"a": 0.10, "b": 0.00040, "n": 0},
+        "open":   {"a": 0.20, "b": 0.00080, "c": 0.50, "n": 0, "n_h": 0},
+        "closed": {"a": 0.10, "b": 0.00040, "c": 0.15, "n": 0, "n_h": 0},
     },
-    "insulated": {     # modern envelope, double glazing — closing really holds the cool
+    "insulated": {     # modern envelope, double glazing — closing really holds cool & air
         "label":  "Modern / insulated (cavity or EWI, double glazing)",
-        "open":   {"a": 0.18, "b": 0.00065, "n": 0},
-        "closed": {"a": 0.05, "b": 0.00022, "n": 0},
+        "open":   {"a": 0.18, "b": 0.00065, "c": 0.45, "n": 0, "n_h": 0},
+        "closed": {"a": 0.05, "b": 0.00022, "c": 0.08, "n": 0, "n_h": 0},
     },
 }
 BUILDING_PROFILE = os.getenv("BUILDING_PROFILE", "uninsulated")
 _profile = BUILDING_PROFILES.get(BUILDING_PROFILE, BUILDING_PROFILES["uninsulated"])
 CAL_DEFAULTS = {"open": dict(_profile["open"]), "closed": dict(_profile["closed"])}
-MIN_CAL_SAMPLES = 24   # per regime before a fit is trusted over the profile seed
+# The seed acts as a prior worth this many observations. Each learned coefficient is
+# blended toward its seed as  param = (n·fit + K·seed) / (n + K)  — pure seed with no
+# data, asymptotically the raw fit as history grows. So accuracy improves continuously
+# with more data and there's no hard cut-over: at n = K the fit and seed weigh equally.
+CAL_PRIOR_WEIGHT = float(os.getenv("CAL_PRIOR_WEIGHT") or "24")
 CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
@@ -131,21 +137,32 @@ def get_forecast():
 
 
 def load_calibration():
-    """Load fitted thermal params from the volume, falling back to defaults per regime.
+    """Blend each regime's fitted params with its profile seed by sample count.
 
-    A regime only uses its fitted (a, b) once it has at least MIN_CAL_SAMPLES of
-    real history behind it — until then it rides the hand-picked defaults.
+    Rather than a hard switch once enough data exists, every fitted coefficient is
+    shrunk toward its seed:  param = (n·fit + K·seed) / (n + K)  (K = CAL_PRIOR_WEIGHT).
+    With no history it's the pure seed; the more data accrues the closer it gets to the
+    raw fit — so accuracy climbs continuously and without a cap. Temperature (a, b) is
+    weighted by its own sample count; humidity (c) by the humidity sample count, since
+    rows logged while the sensor was offline carry no real RH.
     """
-    cal = {k: dict(v) for k, v in CAL_DEFAULTS.items()}
+    cal = {k: {"a": v["a"], "b": v["b"], "c": v["c"]} for k, v in CAL_DEFAULTS.items()}
     try:
         with open(CALIBRATION_FILE) as f:
             fitted = json.load(f)
-        for regime in cal:
-            f_r = fitted.get(regime)
-            if f_r and f_r.get("n", 0) >= MIN_CAL_SAMPLES:
-                cal[regime] = {"a": f_r["a"], "b": f_r["b"], "n": f_r["n"]}
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
-        pass
+    except (FileNotFoundError, json.JSONDecodeError):
+        return cal
+    K = CAL_PRIOR_WEIGHT
+    for regime, seed in CAL_DEFAULTS.items():
+        f_r = fitted.get(regime) or {}
+        n = f_r.get("n", 0)
+        if n > 0:
+            for p in ("a", "b"):
+                if p in f_r:
+                    cal[regime][p] = (n * f_r[p] + K * seed[p]) / (n + K)
+        n_h = f_r.get("n_h", 0)
+        if n_h > 0 and "c" in f_r:
+            cal[regime]["c"] = (n_h * f_r["c"] + K * seed["c"]) / (n_h + K)
     return cal
 
 
@@ -265,26 +282,40 @@ def wet_bulb(t_c, rh):
             - 4.686035)
 
 
-def forecast_wetbulb_max(forecast, cal, indoor_now=None):
+def forecast_wetbulb_max(forecast, cal, indoor_now=None, indoor_rh_now=None):
     """Project today's peak indoor wet-bulb (°C) and the hour it occurs.
 
-    Pairs the indoor-temperature projection (the prediction engine, anchored to
-    the live sensor when we have one) with an indoor-humidity estimate — outdoor
-    vapour pressure re-expressed at the projected indoor temp — and takes the
-    hourly maximum. Indoor moisture sources aren't modelled, so it's approximate,
-    but it answers "how balmy will it get inside today". When anchored, only hours
-    from now forward are considered (the peak is still ahead in the morning brief).
+    Runs the prediction engine forward on two coupled tracks, regime-aware (windows
+    assumed shut once it's warmer outside than in):
+      • temperature — project_indoor / simulate_indoor_day, anchored to the live sensor
+      • moisture    — indoor vapour pressure relaxes toward outdoor at the learned rate
+                      cal[regime]['c'], anchored to the live RH reading when we have one
+    Each hour we convert the projected vapour pressure back to RH at the projected temp
+    and take the wet-bulb; the daily max answers "how balmy will it get inside today".
+    With no live RH anchor we seed indoor moisture at the outdoor value. When anchored,
+    only hours from now forward count (the peak is still ahead in the morning brief).
     """
     if indoor_now is not None:
         current_hour = datetime.now(timezone.utc).hour + 1  # UTC+1 approximates BST
         curve = project_indoor(forecast, indoor_now, current_hour, cal)
     else:
         curve = simulate_indoor_day(forecast, cal)
-    best_wb, best_h = None, None
+
+    e_in = ((indoor_rh_now / 100.0) * saturation_vp(indoor_now)
+            if indoor_now is not None and indoor_rh_now is not None else None)
+    best_wb, best_h, first = None, None, True
     for (h, t_out, _s, rh_out), (_, t_in) in zip(forecast, curve):
         if t_in is None:
             continue
-        rh_in = estimate_indoor_humidity(t_in, t_out, rh_out)
+        e_out = (rh_out / 100.0) * saturation_vp(t_out)
+        if first:
+            if e_in is None:
+                e_in = e_out                        # no anchor → assume equilibrated
+            first = False
+        else:
+            closed = t_out >= t_in
+            e_in += cal["closed" if closed else "open"]["c"] * (e_out - e_in)  # dt = 1h
+        rh_in = max(1.0, min(100.0, e_in / saturation_vp(t_in) * 100.0))
         wb = wet_bulb(t_in, rh_in)
         if best_wb is None or wb > best_wb:
             best_wb, best_h = wb, h
@@ -294,14 +325,18 @@ def forecast_wetbulb_max(forecast, cal, indoor_now=None):
 
 
 def calibrate_from_history():
-    """Fit per-regime thermal params (a, b) from the recorded history CSV.
+    """Fit per-regime temperature (a, b) and humidity (c) params from the history CSV.
 
     For each pair of consecutive same-regime samples (regime taken from the status
     recommended at the time — i.e. assuming you followed the advice), least-squares
-    fit the hourly step:  Δindoor = a·(outdoor − indoor)·Δt + b·solar·Δt
-    The result is written to CALIBRATION_FILE; regimes with < MIN_CAL_SAMPLES of
-    data are skipped and keep their defaults (see load_calibration). Over time, as
-    closed-window days accumulate, the closed model learns how well the flat holds.
+    fit the hourly steps:
+        Δindoor   = a·(outdoor − indoor)·Δt + b·solar·Δt        (temperature)
+        Δe_indoor = c·(e_outdoor − e_indoor)·Δt                 (moisture, vapour pressure)
+    where e is vapour pressure (the conserved quantity — RH alone is temperature-
+    dependent). The humidity fit only uses pairs where both indoor RH readings and the
+    outdoor RH are real (sensor online). Results + sample counts go to CALIBRATION_FILE;
+    load_calibration() blends them toward the seed by count, so every extra day of data
+    sharpens the model — no threshold, no cap.
     """
     token = os.getenv("GITHUB_TOKEN")
     if not token:
@@ -329,30 +364,55 @@ def calibrate_from_history():
             indoor, status = float(parts[9]), parts[12]
         except (ValueError, IndexError):
             continue
-        rows.append((ts, outdoor, solar, indoor, status))
+        # Humidity columns are blank when the sensor was offline — keep as None then,
+        # so the moisture fit only ever sees real readings.
+        try:
+            out_rh = float(parts[3]) if parts[3] else None
+        except ValueError:
+            out_rh = None
+        try:
+            in_rh = float(parts[10]) if parts[10] else None
+        except ValueError:
+            in_rh = None
+        rows.append((ts, outdoor, solar, indoor, status, out_rh, in_rh))
 
-    acc = {r: dict(S11=0.0, S12=0.0, S22=0.0, Sy1=0.0, Sy2=0.0, n=0)
+    acc = {r: dict(S11=0.0, S12=0.0, S22=0.0, Sy1=0.0, Sy2=0.0, n=0,
+                   Hxx=0.0, Hxy=0.0, n_h=0)
            for r in ("open", "closed")}
-    for (t0, o0, s0, i0, st0), (t1, _o1, _s1, i1, _st1) in zip(rows, rows[1:]):
+    for (t0, o0, s0, i0, st0, orh0, irh0), (t1, _o1, _s1, i1, _st1, _orh1, irh1) in zip(rows, rows[1:]):
         dt = (t1 - t0).total_seconds() / 3600.0
         if dt <= 0 or dt > 1.5:          # skip overnight gaps and duplicate runs
             continue
         regime = "closed" if st0 == "close" else "open"
-        x1, x2, y = (o0 - i0) * dt, s0 * dt, i1 - i0
         a = acc[regime]
+        # temperature: Δindoor = a·(outdoor−indoor)·dt + b·solar·dt
+        x1, x2, y = (o0 - i0) * dt, s0 * dt, i1 - i0
         a["S11"] += x1 * x1; a["S12"] += x1 * x2; a["S22"] += x2 * x2
         a["Sy1"] += x1 * y;  a["Sy2"] += x2 * y;  a["n"] += 1
+        # moisture: Δe_in = c·(e_out−e_in)·dt, fit in vapour-pressure space
+        if orh0 is not None and irh0 is not None and irh1 is not None:
+            e_out = (orh0 / 100.0) * saturation_vp(o0)
+            e_in0 = (irh0 / 100.0) * saturation_vp(i0)
+            e_in1 = (irh1 / 100.0) * saturation_vp(i1)
+            hx, hy = (e_out - e_in0) * dt, e_in1 - e_in0
+            a["Hxx"] += hx * hx; a["Hxy"] += hx * hy; a["n_h"] += 1
 
     fitted = {}
     for regime, a in acc.items():
+        entry = {}
         det = a["S11"] * a["S22"] - a["S12"] * a["S12"]
-        if a["n"] < MIN_CAL_SAMPLES or abs(det) < 1e-9:
-            continue
-        coef_a = (a["Sy1"] * a["S22"] - a["Sy2"] * a["S12"]) / det
-        coef_b = (a["S11"] * a["Sy2"] - a["S12"] * a["Sy1"]) / det
-        coef_a = max(0.01, min(0.6, coef_a))     # clamp to physically sane ranges
-        coef_b = max(0.0, min(0.005, coef_b))
-        fitted[regime] = {"a": round(coef_a, 5), "b": round(coef_b, 7), "n": a["n"]}
+        if a["n"] >= 2 and abs(det) > 1e-9:
+            coef_a = (a["Sy1"] * a["S22"] - a["Sy2"] * a["S12"]) / det
+            coef_b = (a["S11"] * a["Sy2"] - a["S12"] * a["Sy1"]) / det
+            entry["a"] = round(max(0.01, min(0.6, coef_a)), 5)    # clamp to sane ranges
+            entry["b"] = round(max(0.0, min(0.005, coef_b)), 7)
+            entry["n"] = a["n"]
+        if a["n_h"] >= 2 and a["Hxx"] > 1e-9:
+            coef_c = a["Hxy"] / a["Hxx"]
+            entry["c"] = round(max(0.0, min(1.0, coef_c)), 4)     # 0..1 relax fraction/hr
+            entry["n_h"] = a["n_h"]
+        if entry:
+            fitted[regime] = entry
 
     if not fitted:
         print("Calibration: not enough data yet — keeping defaults.")
@@ -570,7 +630,7 @@ def comfort_word(wb):
     return "extreme"
 
 
-def daily_summary(outdoor, cal, indoor_now=None):
+def daily_summary(outdoor, cal, indoor_now=None, indoor_rh_now=None):
     try:
         forecast = get_forecast()
     except Exception as e:
@@ -578,7 +638,7 @@ def daily_summary(outdoor, cal, indoor_now=None):
         return
 
     close_hour, open_hour, max_temp, max_hour = forecast_windows(forecast, cal, indoor_now)
-    wb_max, wb_hour = forecast_wetbulb_max(forecast, cal, indoor_now)
+    wb_max, wb_hour = forecast_wetbulb_max(forecast, cal, indoor_now, indoor_rh_now)
 
     print(f"daily summary: max={max_temp:.1f}°C at {fmt_hour(max_hour)}  close={close_hour}  open={open_hour}  wetbulb_max={wb_max}  indoor_now={indoor_now}")
 
@@ -644,7 +704,9 @@ def main():
         )
         # Today's projected peak indoor wet-bulb — "how balmy will it get inside"
         wetbulb_max, wetbulb_peak_hour = forecast_wetbulb_max(
-            forecast, cal, shelly["temp"] if shelly else None
+            forecast, cal,
+            shelly["temp"] if shelly else None,
+            shelly["humidity"] if shelly else None,
         )
         # Is outdoor still climbing? (drives anticipatory close)
         current_hour = datetime.now(timezone.utc).hour + 1
@@ -700,7 +762,9 @@ def main():
     print(f"outdoor={outdoor:.1f}  indoor_est={indoor_est}  last={last}  rising={rising}  -> {status}  (close={display_close} open={display_open})")
 
     if is_brief:
-        daily_summary(outdoor, cal, shelly["temp"] if shelly else None)
+        daily_summary(outdoor, cal,
+                      shelly["temp"] if shelly else None,
+                      shelly["humidity"] if shelly else None)
         update_dashboard(outdoor, last or "open", indoor_est, forecast_max, forecast_peak_hour, display_close, display_open, forecast_hourly, indoor_humidity_display, indoor_estimated, wetbulb_max, wetbulb_peak_hour)
         save_state(state)
         return
