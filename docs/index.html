@@ -335,14 +335,16 @@
       const outdoorHist = recent.map(r => ({ x: r.ts, y: r.outdoor }))
       const indoorHist  = recent.map(r => ({ x: r.ts, y: r.indoor  }))
 
-      // extend outdoor line forward with bias-corrected forecast
-      const fcPoints = []
-      if (d.forecast_hourly && d.outdoor_c != null) {
-        const fmap = new Map(d.forecast_hourly.map(e => [e[0], e[1]]))
-        const lastRow = recent[recent.length - 1]
-        const lastHour = new Date(lastRow.ts).getHours()
-        const fcAtLast = fmap.get(lastHour)
-        const bias = fcAtLast != null ? lastRow.outdoor - fcAtLast : 0
+      // Extend a line forward from the model's hourly projection, bias-corrected so it
+      // joins the last real reading smoothly (the raw model can sit a touch off). idx is
+      // the forecast_hourly column: 1 = outdoor, 2 = modelled indoor.
+      function forecastLine(idx, lastVal) {
+        const out = []
+        if (!d.forecast_hourly || lastVal == null) return out
+        const fmap = new Map(d.forecast_hourly.map(e => [e[0], e[idx]]))
+        const lastHour = new Date(recent[recent.length - 1].ts).getHours()
+        const atLast = fmap.get(lastHour)
+        const bias = atLast != null ? lastVal - atLast : 0
         const nowH = new Date().getHours()
         for (let i = 0; i <= 6; i++) {
           const h = (nowH + i) % 24
@@ -350,9 +352,13 @@
           if (fc == null) continue
           const t = new Date(); t.setHours(h, 0, 0, 0)
           if (nowH + i >= 24) t.setDate(t.getDate() + 1)
-          fcPoints.push({ x: t.getTime(), y: +(fc + bias).toFixed(1) })
+          out.push({ x: t.getTime(), y: +(fc + bias).toFixed(1) })
         }
+        return out
       }
+      const lastRow = recent[recent.length - 1]
+      const fcPoints = forecastLine(1, d.outdoor_c != null ? lastRow.outdoor : null)
+      const fcIndoor = forecastLine(2, lastRow.indoor)
 
       const closeBandsPlugin = {
         id: 'closeBands',
@@ -402,7 +408,16 @@
               data: indoorHist,
               borderColor: '#4db6ff',
               borderWidth: 2,
-              borderDash: [5, 3],
+              pointRadius: 0,
+              tension: 0.3,
+              fill: false,
+            },
+            {
+              label: 'Indoor →',
+              data: fcIndoor,
+              borderColor: 'rgba(77,182,255,0.5)',
+              borderWidth: 1.5,
+              borderDash: [4, 3],
               pointRadius: 0,
               tension: 0.3,
               fill: false,
