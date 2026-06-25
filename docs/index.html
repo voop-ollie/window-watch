@@ -143,7 +143,7 @@
       position: relative;
     }
 
-    .wetbulb { width: 100%; margin-bottom: 32px; }
+    .wetbulb { width: 100%; margin-top: 32px; }
     .wetbulb-head {
       display: flex; justify-content: space-between; align-items: baseline;
       margin-bottom: 8px;
@@ -219,6 +219,12 @@
         <span id="balance-outdoor-label"></span>
       </div>
     </div>
+    <div class="forecast" id="forecast" style="display:none"></div>
+    <div class="updated"><span class="dot"></span><span id="updated">checking…</span><span id="checked"></span></div>
+    <button class="refresh-btn" id="refresh-btn" onclick="manualRefresh()">Refresh</button>
+    <div class="chart-wrap" id="chart-wrap" style="display:none">
+      <canvas id="temp-chart"></canvas>
+    </div>
     <div class="wetbulb" id="wetbulb" style="display:none">
       <div class="wetbulb-head">
         <span class="wetbulb-title">air comfort · how survivable it feels</span>
@@ -235,12 +241,6 @@
       </div>
       <div class="wetbulb-readout" id="wetbulb-readout"></div>
       <div class="wetbulb-foot" id="wetbulb-foot"></div>
-    </div>
-    <div class="forecast" id="forecast" style="display:none"></div>
-    <div class="updated"><span class="dot"></span><span id="updated">checking…</span><span id="checked"></span></div>
-    <button class="refresh-btn" id="refresh-btn" onclick="manualRefresh()">Refresh</button>
-    <div class="chart-wrap" id="chart-wrap" style="display:none">
-      <canvas id="temp-chart"></canvas>
     </div>
   </div>
 
