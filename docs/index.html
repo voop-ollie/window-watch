@@ -157,37 +157,43 @@
     .wetbulb-title { font-size: 12px; opacity: 0.5; letter-spacing: 0.02em; }
     .wetbulb-value { font-size: 14px; font-weight: 600; }
     .wetbulb-value span { opacity: 0.5; font-weight: 400; }
+    /* The bar's 0–100% maps wet-bulb 18→28° (the danger line), so the marker sits at
+       exactly the mugginess % shown. Colour boundaries match the comfort bands:
+       comfortable<22 (40%), muggy<26 (80%), caution→danger at 28 (100%). */
+    .wetbulb-scale-wrap { position: relative; height: 8px; margin-top: 14px; }
     .wetbulb-scale {
-      position: relative; height: 8px; border-radius: 4px; overflow: hidden;
-      /* Colour boundaries align with the comfort-band thresholds on the 18–35°
-         wet-bulb scale: comfortable<22 (24%), muggy<26 (47%), caution<28 (59%),
-         danger<31 (76%), extreme beyond. */
+      position: absolute; inset: 0; border-radius: 4px; overflow: hidden;
       background: linear-gradient(to right,
-        #3a7bd5 0%,        /* comfortable (≤18) */
-        #5cae8e 24%,       /* → muggy boundary (22°) */
-        #d9b54a 47%,       /* → caution boundary (26°) */
-        #e08a3c 59%,       /* → danger boundary (28°) */
-        #d04a3c 76%,       /* → extreme boundary (31°) */
-        #7a1f1f 100%);     /* extreme (35°) */
+        #3a7bd5 0%,        /* fresh (18°) */
+        #5cae8e 40%,       /* comfortable → muggy (22°) */
+        #d9b54a 64%,       /* mid-muggy */
+        #e08a3c 80%,       /* muggy → caution (26°) */
+        #d04a3c 100%);     /* caution → danger line (28°) */
     }
     .wetbulb-marker {
-      position: absolute; top: -3px; bottom: -3px; width: 3px;
+      position: absolute; top: -4px; bottom: -4px; width: 3px;
       transform: translateX(-50%); background: #fff; border-radius: 2px;
       box-shadow: 0 0 0 1.5px rgba(0,0,0,0.45);
       transition: left 0.5s ease;
     }
+    /* Today's projected peak — a lighter ghost line with a hollow ring, clearly
+       secondary to the solid "now" marker. */
+    .wetbulb-peak {
+      position: absolute; top: -4px; bottom: -4px; width: 2px;
+      transform: translateX(-50%); background: rgba(255,255,255,0.4); border-radius: 2px;
+      transition: left 0.5s ease;
+    }
+    .wetbulb-peak::after {
+      content: ""; position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
+      width: 5px; height: 5px; border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,0.65); background: transparent;
+    }
     .wetbulb-ticks {
-      position: relative; height: 14px; margin-top: 4px; font-size: 10px; opacity: 0.35;
+      position: relative; height: 14px; margin-top: 6px; font-size: 10px; opacity: 0.35;
     }
     .wetbulb-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
     .wetbulb-readout { margin-top: 8px; font-size: 13px; opacity: 0.7; text-align: center; }
     .wetbulb-readout.alert { opacity: 1; color: #ffd0d0; font-weight: 600; }
-    .wetbulb-forecast {
-      margin-top: 10px; padding-top: 8px;
-      border-top: 1px solid rgba(255,255,255,0.08);
-      font-size: 12px; opacity: 0.6; text-align: center;
-    }
-    .wetbulb-forecast strong { opacity: 1; font-weight: 600; }
     .wetbulb-foot { margin-top: 4px; font-size: 10px; opacity: 0.28; text-align: center; }
 
     .dot {
@@ -242,17 +248,17 @@
         <span class="wetbulb-title" id="wetbulb-title">indoor air · how survivable it feels</span>
         <span class="wetbulb-value" id="wetbulb-value">—</span>
       </div>
-      <div class="wetbulb-scale">
+      <div class="wetbulb-scale-wrap">
+        <div class="wetbulb-scale"></div>
+        <div class="wetbulb-peak" id="wetbulb-peak" style="display:none"></div>
         <div class="wetbulb-marker" id="wetbulb-marker"></div>
       </div>
       <div class="wetbulb-ticks">
-        <span style="left:12%">comfortable</span>
-        <span style="left:35%">muggy</span>
-        <span style="left:53%">caution</span>
-        <span style="left:68%">danger</span>
+        <span style="left:20%">comfortable</span>
+        <span style="left:60%">muggy</span>
+        <span style="left:90%">caution</span>
       </div>
       <div class="wetbulb-readout" id="wetbulb-readout"></div>
-      <div class="wetbulb-forecast" id="wetbulb-forecast"></div>
       <div class="wetbulb-foot" id="wetbulb-foot"></div>
     </div>
   </div>
@@ -476,10 +482,10 @@
     const HYSTERESIS = 1.0  // reopen band — must match Python default
     const CLOSE_LEAD = 0.5  // anticipatory close margin — must match Python default
 
-    // Wet-bulb thresholds (°C). 28° is where prolonged indoor exposure turns
-    // dangerous; 35° is the theoretical survivability limit.
+    // Wet-bulb thresholds (°C). The gauge runs from a fresh WB_MIN up to WB_DANGER,
+    // where prolonged indoor exposure turns dangerous (the bar's 100%).
     const WB_DANGER = 28
-    const WB_MIN = 18, WB_MAX = 35   // gauge scale bounds
+    const WB_MIN = 18
 
     // Stull (2011) approximation — accurate to ~±0.65°C for typical indoor RH.
     function wetBulb(T, RH) {
@@ -489,10 +495,6 @@
         + Math.atan(T + RH) - Math.atan(RH - 1.676331)
         + 0.00391838 * Math.pow(RH, 1.5) * Math.atan(0.023101 * RH)
         - 4.686035
-    }
-
-    function wbPct(wb) {
-      return Math.max(0, Math.min(100, (wb - WB_MIN) / (WB_MAX - WB_MIN) * 100))
     }
 
     // Translate wet-bulb into a 0–100 mugginess level — rises with the discomfort so
@@ -605,7 +607,7 @@
         const val = document.getElementById("wetbulb-value")
         val.innerHTML = `${pct}% <span>· ${word}</span>`
         val.style.color = colour
-        document.getElementById("wetbulb-marker").style.left = wbPct(wb) + "%"
+        document.getElementById("wetbulb-marker").style.left = pct + "%"
 
         const readout = document.getElementById("wetbulb-readout")
         if (wb < 22) {
@@ -622,15 +624,15 @@
           readout.textContent = "⚠ Heat-stress danger — ventilate, hydrate, avoid exertion"
         }
 
-        // Today's projected peak — "how balmy will it get" from the engine.
-        const fcEl = document.getElementById("wetbulb-forecast")
-        if (d.wetbulb_max_c != null && d.wetbulb_peak_hour != null) {
-          const mPct = muggyPct(d.wetbulb_max_c)
-          const [mWord] = comfortBand(d.wetbulb_max_c)
-          fcEl.style.display = ""
-          fcEl.innerHTML = `Today's muggiest: <strong>${mPct}% · ${mWord}</strong> around ${fmtHour(d.wetbulb_peak_hour)}`
+        // Today's projected peak — shown as a second, ghost marker on the same scale
+        // ("how balmy will it get" from the engine), not as a separate line of text.
+        const peakEl = document.getElementById("wetbulb-peak")
+        if (d.wetbulb_max_c != null) {
+          peakEl.style.display = ""
+          peakEl.style.left = muggyPct(d.wetbulb_max_c) + "%"
+          peakEl.title = `Today's peak: ${muggyPct(d.wetbulb_max_c)}% around ${fmtHour(d.wetbulb_peak_hour)}`
         } else {
-          fcEl.style.display = "none"
+          peakEl.style.display = "none"
         }
 
         // Keep the raw wet-bulb available, but demoted to a small technical footnote
