@@ -495,11 +495,11 @@
       return Math.max(0, Math.min(100, (wb - WB_MIN) / (WB_MAX - WB_MIN) * 100))
     }
 
-    // Translate wet-bulb into a 0–100 comfort score — easier to read at a glance
-    // than a °C value sitting next to the air temperatures. 100% = fresh (≤18°),
-    // 0% = the 28° danger line; beyond that it's pinned at 0 and the readout alerts.
-    function comfortPct(wb) {
-      return Math.round(Math.max(0, Math.min(100, (WB_DANGER - wb) / (WB_DANGER - WB_MIN) * 100)))
+    // Translate wet-bulb into a 0–100 mugginess level — rises with the discomfort so
+    // it reads the same direction as the word and the warm end of the scale. 0% = fresh
+    // (≤18°), 100% = the 28° danger line; beyond that it's pinned at 100 and alerts.
+    function muggyPct(wb) {
+      return Math.round(Math.max(0, Math.min(100, (wb - WB_MIN) / (WB_DANGER - WB_MIN) * 100)))
     }
 
     // [word, colour] for the band the air is currently in.
@@ -597,7 +597,7 @@
       const wbBox = document.getElementById("wetbulb")
       if (wb != null) {
         const est = !!d.indoor_estimated   // sensor offline → modelled temp + RH
-        const pct = comfortPct(wb)
+        const pct = muggyPct(wb)
         const [word, colour] = comfortBand(wb)
         wbBox.style.display = ""
         document.getElementById("wetbulb-title").textContent =
@@ -625,7 +625,7 @@
         // Today's projected peak — "how balmy will it get" from the engine.
         const fcEl = document.getElementById("wetbulb-forecast")
         if (d.wetbulb_max_c != null && d.wetbulb_peak_hour != null) {
-          const mPct = comfortPct(d.wetbulb_max_c)
+          const mPct = muggyPct(d.wetbulb_max_c)
           const [mWord] = comfortBand(d.wetbulb_max_c)
           fcEl.style.display = ""
           fcEl.innerHTML = `Today's muggiest: <strong>${mPct}% · ${mWord}</strong> around ${fmtHour(d.wetbulb_peak_hour)}`
